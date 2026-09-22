@@ -1,0 +1,49 @@
+name: qingyu
+services:
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: worldgame
+      POSTGRES_USER: worldgame
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?set database password}
+    volumes:
+      - world-data:/var/lib/postgresql/data
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "max_connections=30"]
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U worldgame -d worldgame"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  game:
+    image: eclipse-temurin:21-jre
+    restart: unless-stopped
+    user: "10001:10001"
+    working_dir: /app
+    command: ["java", "-Xms128m", "-Xmx512m", "-XX:MaxDirectMemorySize=96m", "-XX:+ExitOnOutOfMemoryError", "-jar", "game.jar"]
+    volumes:
+      - ./game.jar:/app/game.jar:ro
+    environment:
+      BIND_ADDRESS: 0.0.0.0
+      DATABASE_URL: jdbc:postgresql://database:5432/worldgame
+      DATABASE_USER: worldgame
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set initial administrator password}
+      APP_ORIGIN: https://${DOMAIN:?set domain}
+      SECURE_COOKIE: "true"
+    ports:
+      - "127.0.0.1:18080:8080"
+    depends_on:
+      database:
+        condition: service_healthy
+    mem_limit: 768m
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+volumes:
+  world-data:

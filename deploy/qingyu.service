@@ -1,0 +1,24 @@
+[Unit]
+Description=Qingyu shared world game
+After=network.target postgresql@17-main.service
+Requires=postgresql@17-main.service
+
+[Service]
+User=qingyu
+Group=qingyu
+WorkingDirectory=/opt/qingyu
+EnvironmentFile=/opt/qingyu/runtime.env
+ExecStart=/usr/bin/java -Xms128m -Xmx512m -XX:MaxDirectMemorySize=96m -XX:+ExitOnOutOfMemoryError -jar /opt/qingyu/game.jar
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+MemoryMax=768M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

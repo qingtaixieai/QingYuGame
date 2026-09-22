@@ -1,0 +1,14 @@
+export type Hex={q:number;r:number};
+export type Tile=Hex&{terrain:string;road:boolean;place:null|{name:string;type:string;description:string}};
+export type World={version:string;seed:number;name:string;radius:number;spawn:Hex;tiles:Tile[]};
+export type Account=Hex&{id:string;username:string;approved:boolean;admin:boolean;color:string};
+export type Player=Hex&{id:string;username:string;color:string;online:boolean;moving:boolean};
+export type Item={code:string;name:string;quantity:number};
+export type ResourceNode=Hex&{id:string;kind:'wood'|'stone';readyAt:number};
+export type WorldAction=Hex&{accountId:string;kind:string;nodeId:string;startedAt:number;endsAt:number};
+export type Emote={accountId:string;code:string;startedAt:number;expiresAt:number};
+export type State={type:'state';version:string;players:Player[];tick:number;emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];serverTime:number};
+export const terrainNames:Record<string,string>={plain:'平原',forest:'森林',hill:'丘陵',mountain:'高山',ocean:'海洋',beach:'海岸',river:'河流',bridge:'桥梁'};
+export const placeNames:Record<string,string>={town:'城镇',village:'村庄',ruin:'遗迹'};
+export const key=(h:Hex)=>`${h.q},${h.r}`;
+export const walkable=(t:Tile)=>!['ocean','mountain','river'].includes(t.terrain);
