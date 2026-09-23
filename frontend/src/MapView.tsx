@@ -99,7 +99,7 @@ export function MapView(props:Props){
       }
       function wheel(e:WheelEvent){e.preventDefault();const rect=canvas.getBoundingClientRect();zoomAt(Math.exp(-e.deltaY*.0012),e.clientX-rect.left,e.clientY-rect.top);}
       canvas.style.cursor='grab';canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',()=>{start=null;});canvas.addEventListener('wheel',wheel,{passive:false});
-      const entities=new Map<string,{container:Container;body:Graphics;bar:Graphics;bubble:Graphics;emoteCode:string;label:Text;target:{x:number;y:number};color:string;online:boolean}>();
+      const entities=new Map<string,{container:Container;body:Graphics;bar:Graphics;bubble:Graphics;emoteCode:string;label:Text;battleTag:Text;target:{x:number;y:number};color:string;online:boolean;inBattle:boolean}>();
       let previousPlayers:Player[]|null=null,previousSelected:Tile|null|undefined,previousRoute:Hex[]|null=null;
       const resourceSprites=new Map<string,{g:Graphics;readyAt:number;q:number;r:number}>();
       const animations:{container:Container;start:number;x:number;y:number;stone?:Graphics}[]=[];
@@ -134,13 +134,13 @@ export function MapView(props:Props){
           for(const p of current.players){
             const count=counts.get(key(p))||0;counts.set(key(p),count+1);const pos=position(p);pos.x+=(count%3-1)*9;pos.y+=Math.floor(count/3)*9;
             let entity=entities.get(p.id);
-            if(!entity){const container=new Container(),body=new Graphics(),bar=new Graphics(),bubble=new Graphics(),label=new Text({text:p.username,style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:10,fill:0x254c41,stroke:{color:0xfff9e6,width:3}}});label.anchor.set(.5);label.y=-28;bubble.y=-68;container.addChild(body,label,bar,bubble);actors.addChild(container);container.position.set(pos.x,pos.y);entity={container,body,bar,bubble,emoteCode:'',label,target:pos,color:'',online:!p.online};entities.set(p.id,entity);}
+            if(!entity){const container=new Container(),body=new Graphics(),bar=new Graphics(),bubble=new Graphics(),label=new Text({text:p.username,style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:10,fill:0x254c41,stroke:{color:0xfff9e6,width:3}}}),battleTag=new Text({text:'战斗中',style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:12,fontWeight:'bold',fill:0xa44536,stroke:{color:0xfff6dc,width:4}}});label.anchor.set(.5);label.y=-28;battleTag.anchor.set(.5);battleTag.y=-43;battleTag.visible=p.inBattle;bubble.y=-68;container.addChild(body,label,battleTag,bar,bubble);actors.addChild(container);container.position.set(pos.x,pos.y);entity={container,body,bar,bubble,emoteCode:'',label,battleTag,target:pos,color:'',online:!p.online,inBattle:!p.inBattle};entities.set(p.id,entity);}
             entity.target=pos;
-            if(entity.color!==p.color||entity.online!==p.online){entity.color=p.color;entity.online=p.online;const g=entity.body;g.clear();g.ellipse(0,8,9,4).fill({color:0x365443,alpha:.25});
+            if(entity.color!==p.color||entity.online!==p.online||entity.inBattle!==p.inBattle){entity.color=p.color;entity.online=p.online;entity.inBattle=p.inBattle;const g=entity.body;g.clear();g.ellipse(0,8,9,4).fill({color:0x365443,alpha:.25});
               if(p.id===current.me)g.circle(0,2,14).stroke({color:0xfdf7d1,width:2});
               const c=p.online?Number.parseInt(p.color.slice(1),16):0x929d97;
               pixel(g,-6,-5,12,12,c);pixel(g,-5,-14,10,10,0xf1d3a3);pixel(g,-7,-17,14,6,c);pixel(g,-4,7,3,5,0x54594b);pixel(g,2,7,3,5,0x54594b);pixel(g,-2,-10,1,2,0x5a5748);pixel(g,3,-10,1,2,0x5a5748);
-              entity.label.text=p.username+(p.online?'':' · 离线');entity.container.alpha=p.online?1:.65;
+              entity.label.text=p.username+(p.online?'':' · 离线');entity.battleTag.visible=p.inBattle;entity.container.alpha=p.online?1:.65;
             }
           }
         }

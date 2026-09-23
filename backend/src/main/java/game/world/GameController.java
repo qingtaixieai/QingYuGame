@@ -17,6 +17,11 @@ public class GameController {
     record Approval(boolean approved) {}
     record Password(String password) {}
     record Regenerate(String confirmation) {}
+    record BattleStart(UUID targetId,String version) {}
+    record BattleJoin(UUID battleId,String version) {}
+    record BattleStep(UUID battleId,Integer q,Integer r) {}
+    record BattleAttack(UUID battleId,UUID targetId) {}
+    record BattleTurn(UUID battleId) {}
     @GetMapping("/health") public Map<String,String> health(){return Map.of("status","ok");}
     @PostMapping("/register") public Map<String,String> register(@RequestBody Credentials c,HttpServletRequest req){moderation.requireGame(null,ModerationService.ip(req.getRemoteAddr()));world.register(c.username,c.password);return Map.of("message","注册成功，请登录查看审批状态");}
     @PostMapping("/login") public AccountService.Account login(@RequestBody Credentials c,HttpServletRequest req,HttpServletResponse res){return world.login(c.username,c.password,req,res);}
@@ -40,6 +45,27 @@ public class GameController {
         return world.collect(a.id(),m.q,m.r,m.version);
     }
     @PostMapping("/stop") public Map<String,String> stop(HttpServletRequest req){world.stop(accounts.require(req,true,false).id());return Map.of("message","已停下");}
+    @GetMapping("/battle/current") public Object currentBattle(HttpServletRequest req){return world.currentBattle(accounts.require(req,true,false).id());}
+    @PostMapping("/battle/start") public Map<String,UUID> startBattle(@RequestBody BattleStart body,HttpServletRequest req){
+        if(body.targetId()==null||body.version()==null)throw AccountService.bad("请选择同格旅人");
+        return Map.of("id",world.startBattle(accounts.require(req,true,false).id(),body.targetId(),body.version()));
+    }
+    @PostMapping("/battle/join") public Map<String,UUID> joinBattle(@RequestBody BattleJoin body,HttpServletRequest req){
+        if(body.battleId()==null||body.version()==null)throw AccountService.bad("请选择此格战斗");
+        return Map.of("id",world.joinBattle(accounts.require(req,true,false).id(),body.battleId(),body.version()));
+    }
+    @PostMapping("/battle/step") public Map<String,String> battleStep(@RequestBody BattleStep body,HttpServletRequest req){
+        if(body.battleId()==null||body.q()==null||body.r()==null)throw AccountService.bad("战场位置无效");
+        world.battleStep(accounts.require(req,true,false).id(),body.battleId(),body.q(),body.r());return Map.of("message","已移动");
+    }
+    @PostMapping("/battle/attack") public Map<String,String> battleAttack(@RequestBody BattleAttack body,HttpServletRequest req){
+        if(body.battleId()==null||body.targetId()==null)throw AccountService.bad("请选择攻击目标");
+        world.battleAttack(accounts.require(req,true,false).id(),body.battleId(),body.targetId());return Map.of("message","已标记攻击格");
+    }
+    @PostMapping("/battle/end-turn") public Map<String,String> battleEndTurn(@RequestBody BattleTurn body,HttpServletRequest req){
+        if(body.battleId()==null)throw AccountService.bad("战斗已变化，请刷新战场");
+        world.battleEndTurn(accounts.require(req,true,false).id(),body.battleId());return Map.of("message","回合结束");
+    }
     @GetMapping("/admin/accounts") public List<AccountService.Account> list(HttpServletRequest req){accounts.require(req,true,true);return accounts.list();}
     @PostMapping("/admin/accounts/{id}/approval") public Map<String,String> approval(@PathVariable UUID id,@RequestBody Approval body,HttpServletRequest req){
         world.approve(accounts.require(req,true,true).id(),id,body.approved);return Map.of("message",body.approved?"已批准进入":"已撤销权限");
