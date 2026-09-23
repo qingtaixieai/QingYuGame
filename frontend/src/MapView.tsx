@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Application, Container, Graphics, Text } from 'pixi.js';
 // Pixi's official non-eval polyfills keep WebGL rendering compatible with production CSP.
 import 'pixi.js/unsafe-eval';
-import type { Hex, Player, Tile, World, ResourceNode, WorldAction, Emote } from './types';
+import type { Hex, Player, Tile, World, ResourceNode, WorldAction, Emote, BattleSummary } from './types';
 import {emoteArt,emotePalette} from './emotes';
 import { key } from './types';
 
@@ -37,7 +37,7 @@ function ruin(g:Graphics,x:number,y:number){
   pixel(g,x-12,y+8,10,3,0x7d9b61);pixel(g,x+3,y+5,6,4,0x7d9b61);
 }
 export type MapControls={zoom:(factor:number)=>void;fit:()=>void;locate:(h:Hex)=>void};
-type Props={world:World;emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
+type Props={world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
 export function MapView(props:Props){
   const host=useRef<HTMLDivElement>(null), latest=useRef(props);
   latest.current=props;
@@ -49,8 +49,9 @@ export function MapView(props:Props){
       if(disposed){app.destroy(true,{children:true});return;}
       host.current!.appendChild(app.canvas);
       const scene=new Container(),ground=new Graphics(),roads=new Graphics(),decor=new Graphics(),markers=new Container(),selection=new Graphics(),routeLine=new Graphics(),actors=new Container();
-      app.stage.addChild(scene);const resourceLayer=new Container(),effects=new Container();
-      scene.addChild(ground,roads,decor,resourceLayer,markers,routeLine,selection,actors,effects);
+      app.stage.addChild(scene);const resourceLayer=new Container(),effects=new Container(),battleMarks=new Container();
+      scene.addChild(ground,roads,decor,resourceLayer,markers,battleMarks,routeLine,selection,actors,effects);
+      let battleSignature="";
       const map=props.world,index=new Map(map.tiles.map(t=>[key(t),t]));
       for(const t of map.tiles){
         const {x,y}=position(t),n=Math.abs(t.q*137+t.r*73)%7;
@@ -110,6 +111,11 @@ export function MapView(props:Props){
       }
       app.ticker.add(ticker=>{
         const current=latest.current,now=Date.now()+current.clockOffset;
+        const nextBattleSignature=current.battles.map(b=>b.id+":"+b.participants).join("|");
+        if(nextBattleSignature!==battleSignature){battleSignature=nextBattleSignature;battleMarks.removeChildren().forEach(c=>c.destroy());
+          for(const battle of current.battles){const p=position(battle),mark=new Graphics();hex(mark,p.x,p.y,SIZE-1).fill({color:0xa95042,alpha:.22}).stroke({color:0xb65546,width:2});battleMarks.addChild(mark);
+            const label=new Text({text:'⚔ 战斗封锁',style:{fontFamily:'Microsoft YaHei',fontSize:9,fill:0x8b3d32,fontWeight:'bold',stroke:{color:0xfff0d1,width:2}}});label.anchor.set(.5);label.position.set(p.x,p.y+20);battleMarks.addChild(label);}
+        }
         const nodeIds=new Set(current.resources.map(n=>n.id));
         for(const [id,entry]of resourceSprites)if(!nodeIds.has(id)){entry.g.destroy();resourceSprites.delete(id);}
         for(const n of current.resources){

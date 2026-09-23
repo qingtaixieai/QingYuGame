@@ -32,6 +32,7 @@ public class WorldService {
         var rows=db.queryForList("select document from worlds where id=1",String.class);
         if(rows.isEmpty()) {world=WorldMap.generate(new SecureRandom().nextLong());db.update("insert into worlds values(1,?)",json.writeValueAsString(world));}
         else world=json.readValue(rows.getFirst(),WorldMap.class);
+        battles.world(world);
         tx.executeWithoutResult(s->resources.initialize(world));
     }
     public synchronized WorldMap map(){return world;}
@@ -54,7 +55,10 @@ public class WorldService {
         if(battles.engaged(id))throw AccountService.bad("角色正在战斗中，大世界视角只能查看");
         WorldMap.Hex target=new WorldMap.Hex(q,r),from=new WorldMap.Hex(a.q(),a.r());
         if(from.equals(target)){routes.remove(id);return List.of();}
-        List<WorldMap.Hex> path=world.path(from,target);
+        if(battles.blocked(q,r))throw AccountService.bad("此格正在战斗，已封锁通行；请从相邻格选择参战");
+        var available=new HashMap<>(world.index());
+        battles.summaries(world.version()).forEach(b->available.remove(new WorldMap.Hex(b.q(),b.r())));
+        List<WorldMap.Hex> path=WorldMap.path(available,from,target,false);
         if(path.isEmpty())throw AccountService.bad("无法到达这里，请选择陆地或经桥梁绕行");
         tx.executeWithoutResult(s->resources.cancel(id));
         routes.put(id,new ArrayDeque<>(path));broadcast();return path;
@@ -104,7 +108,7 @@ public class WorldService {
         WorldMap next=WorldMap.generate(new SecureRandom().nextLong());
         tx.executeWithoutResult(s->{db.update("update worlds set document=? where id=1",json.writeValueAsString(next));
             db.update("update accounts set q=?,r=?",next.spawn().q(),next.spawn().r());resources.reset(next);battles.reset();audit(actor,"regenerate",next.version());});
-        world=next;routes.clear();emotes.clear();battleRevision++;broadcast();return world;
+        world=next;battles.world(world);routes.clear();emotes.clear();battleRevision++;broadcast();return world;
     }
     public synchronized List<Map<String,Object>> inventory(UUID id){accounts.get(id);return resources.inventory(id);}
     public synchronized Map<String,String> collect(UUID id,int q,int r,String version){
@@ -123,8 +127,8 @@ public class WorldService {
     public synchronized Object currentBattle(UUID actor){return battles.current(actor,onlineUsers());}
     public synchronized UUID startBattle(UUID actor,UUID target,String version){
         if(routes.containsKey(actor)||routes.containsKey(target))throw AccountService.bad("双方需先在同一世界格停下");
-        UUID id=tx.execute(s->{UUID next=battles.start(actor,target,version,world,System.currentTimeMillis());resources.cancel(actor);resources.cancel(target);return next;});
-        routes.remove(actor);routes.remove(target);battleRevision++;broadcast();return id;
+        UUID id=tx.execute(s->{UUID next=battles.start(actor,target,version,world,System.currentTimeMillis());battles.actorIds().forEach(resources::cancel);return next;});
+        battles.actorIds().forEach(idInBattle->{routes.remove(idInBattle);emotes.remove(idInBattle);});battleRevision++;broadcast();return id;
     }
     public synchronized UUID joinBattle(UUID actor,UUID battleId,String version){
         if(routes.containsKey(actor))throw AccountService.bad("请先停下再加入战斗");
@@ -139,6 +143,11 @@ public class WorldService {
     public synchronized void battleAttack(UUID actor,UUID battleId,UUID target){
         requireBattle(actor,battleId);
         tx.executeWithoutResult(s->battles.attack(actor,target,onlineUsers(),System.currentTimeMillis()));
+        battleRevision++;broadcast();
+    }
+    public synchronized void battleWithdraw(UUID actor,UUID battleId,int direction,boolean force){
+        requireBattle(actor,battleId);
+        tx.executeWithoutResult(s->battles.withdraw(actor,direction,force,onlineUsers(),System.currentTimeMillis()));
         battleRevision++;broadcast();
     }
     public synchronized void battleEndTurn(UUID actor,UUID battleId){
@@ -189,6 +198,7 @@ public class WorldService {
             closeInvalidSessions();
         }
         if(routes.isEmpty()){if(resourcesChanged||emotesChanged||battlesChanged||tick%30==0)broadcast();return;}
+        routes.entrySet().removeIf(e->battles.engaged(e.getKey())||!e.getValue().isEmpty()&&battles.blocked(e.getValue().peek().q(),e.getValue().peek().r()));
         Map<UUID,WorldMap.Hex> steps=new HashMap<>();
         routes.forEach((id,path)->{if(!path.isEmpty())steps.put(id,path.peek());});
         // Commit positions before announcing them; a restart cannot roll back an acknowledged step.

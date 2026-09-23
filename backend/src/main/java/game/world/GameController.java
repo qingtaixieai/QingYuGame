@@ -22,6 +22,7 @@ public class GameController {
     record BattleStep(UUID battleId,Integer q,Integer r) {}
     record BattleAttack(UUID battleId,UUID targetId) {}
     record BattleTurn(UUID battleId) {}
+    record BattleWithdraw(UUID battleId,Integer direction,boolean force) {}
     @GetMapping("/health") public Map<String,String> health(){return Map.of("status","ok");}
     @PostMapping("/register") public Map<String,String> register(@RequestBody Credentials c,HttpServletRequest req){moderation.requireGame(null,ModerationService.ip(req.getRemoteAddr()));world.register(c.username,c.password);return Map.of("message","注册成功，请登录查看审批状态");}
     @PostMapping("/login") public AccountService.Account login(@RequestBody Credentials c,HttpServletRequest req,HttpServletResponse res){return world.login(c.username,c.password,req,res);}
@@ -61,6 +62,10 @@ public class GameController {
     @PostMapping("/battle/attack") public Map<String,String> battleAttack(@RequestBody BattleAttack body,HttpServletRequest req){
         if(body.battleId()==null||body.targetId()==null)throw AccountService.bad("请选择攻击目标");
         world.battleAttack(accounts.require(req,true,false).id(),body.battleId(),body.targetId());return Map.of("message","已标记攻击格");
+    }
+    @PostMapping("/battle/withdraw") public Map<String,String> battleWithdraw(@RequestBody BattleWithdraw body,HttpServletRequest req){
+        if(body.battleId()==null||body.direction()==null)throw AccountService.bad("请选择撤离方向");
+        world.battleWithdraw(accounts.require(req,true,false).id(),body.battleId(),body.direction(),body.force());return Map.of("message",body.force()?"已强制撤离":"已准备撤离");
     }
     @PostMapping("/battle/end-turn") public Map<String,String> battleEndTurn(@RequestBody BattleTurn body,HttpServletRequest req){
         if(body.battleId()==null)throw AccountService.bad("战斗已变化，请刷新战场");

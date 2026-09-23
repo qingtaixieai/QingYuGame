@@ -8,12 +8,14 @@ export type ResourceNode=Hex&{id:string;kind:'wood'|'stone';readyAt:number};
 export type WorldAction=Hex&{accountId:string;kind:string;nodeId:string;startedAt:number;endsAt:number};
 export type Emote={accountId:string;code:string;startedAt:number;expiresAt:number};
 export type BattleSummary=Hex&{id:string;participants:number};
-export type BattleActor=Hex&{accountId:string;username:string;color:string;initiative:number;entryRound:number;online:boolean};
+export type BattleActor=Hex&{accountId:string;username:string;color:string;initiative:number;entryRound:number;online:boolean;withdrawDirection:number|null};
 export type BattleIntent=Hex&{attackerId:string;targetId:string;visibility:'public'|'attacker_only'};
 export type BattleEvent={id:number;kind:string;actorId:string|null;targetId:string|null;q:number|null;r:number|null;happenedAt:number};
-export type BattleState={active:false}|{active:true;id:string;worldQ:number;worldR:number;radius:number;round:number;turnAccountId:string;turnPoints:number;turnDeadline:number;attackUsed:boolean;actors:BattleActor[];intents:BattleIntent[];events:BattleEvent[];exits:Hex[]};
+export type BattleState={active:false}|{active:true;id:string;worldQ:number;worldR:number;radius:number;round:number;turnAccountId:string;turnPoints:number;turnDeadline:number;attackUsed:boolean;actors:BattleActor[];intents:BattleIntent[];events:BattleEvent[];edges:BattleEdge[];turnStartEdge:boolean};
 export type State={type:'state';version:string;players:Player[];tick:number;emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];serverTime:number;battles:BattleSummary[];battleRevision:number};
 export const terrainNames:Record<string,string>={plain:'平原',forest:'森林',hill:'丘陵',mountain:'高山',ocean:'海洋',beach:'海岸',river:'河流',bridge:'桥梁'};
 export const placeNames:Record<string,string>={town:'城镇',village:'村庄',ruin:'遗迹'};
 export const key=(h:Hex)=>`${h.q},${h.r}`;
 export const walkable=(t:Tile)=>!['ocean','mountain','river'].includes(t.terrain);
+
+export type BattleEdge=Hex&{direction:number;name:string;walkable:boolean;battleId:string|null;destination:string};
