@@ -191,8 +191,13 @@ public class BattleService {
     public void attackCell(UUID actor,int q,int r,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);Position from=position(b.id(),actor);
         if(!within(q,r)||distance(from.q(),from.r(),q,r)!=1)throw bad("普通攻击只能预设相邻格");
-        if(b.attackUsed())throw bad("本回合已经选择过普通攻击");
+        Intent previous=intents(b.id()).stream().filter(i->i.attackerId().equals(actor)).findFirst().orElse(null);
+        if(previous!=null&&previous.q()==q&&previous.r()==r)return;
         if(b.points()<ATTACK_COST)throw bad("本回合战术点不足");
+        if(previous!=null){
+            db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
+            event(b.id(),"cancel",actor,null,previous.q(),previous.r(),now);
+        }
         db.update("insert into battle_intents(encounter_id,attacker_id,target_id,q,r,visibility) values(?,?,null,?,?,'public')",b.id(),actor,q,r);
         db.update("update battle_encounters set turn_points=turn_points-?,attack_used=true where id=?",ATTACK_COST,b.id());
         event(b.id(),"mark",actor,null,q,r,now);

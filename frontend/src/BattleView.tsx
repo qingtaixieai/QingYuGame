@@ -13,7 +13,7 @@ function Tree(){return <g shapeRendering="crispEdges"><ellipse cy="15" rx="23" r
 function Rock(){return <g shapeRendering="crispEdges"><ellipse cy="10" rx="19" ry="5" fill="#516149" opacity=".2"/><path d="M-17-4h8v-9H7v5h9v19h-33z" fill="#788778"/><path d="M-15-3h8v-8H5v5h8v9h-28z" fill="#b0b6a0"/><path d="M-6-10H4v7H-6z" fill="#d0d0b6"/><path d="M-14 5H3v5h-17z" fill="#95a18a"/><path d="M8 5h10v8H8z" fill="#6e865d"/></g>;}
 export function BattleView({battle,me,connected,clock,onChanged,onMessage}:{battle:Extract<BattleState,{active:true}>;me:string;connected:boolean;clock:number;onChanged:()=>Promise<void>;onMessage:(message:string)=>void}){
  const [mode,setMode]=useState<'inspect'|'move'|'attack'>('inspect');
- const [selected,setSelected]=useState<Hex|null>(null),[busy,setBusy]=useState(false),[zoom,setZoom]=useState(1),[center,setCenter]=useState({x:0,y:0});
+ const [selected,setSelected]=useState<Hex|null>(null),[movePreview,setMovePreview]=useState<Hex|null>(null),[busy,setBusy]=useState(false),[zoom,setZoom]=useState(1),[center,setCenter]=useState({x:0,y:0});
  const drag=useRef<{x:number;y:number;cx:number;cy:number;moved:boolean}|null>(null);
  const own=battle.actors.find(a=>a.accountId===me),current=battle.actors.find(a=>a.accountId===battle.turnAccountId);
  const target=selected?battle.actors.find(a=>a.q===selected.q&&a.r===selected.r):undefined;
@@ -27,7 +27,8 @@ export function BattleView({battle,me,connected,clock,onChanged,onMessage}:{batt
        if(distance({q:0,r:0},next)<=battle.radius&&!occupied.has(k)&&!out.has(k)){out.set(k,[...path,next]);queue.push(next);}}
    }out.delete(`${own.q},${own.r}`);return out;
  },[battle.actors,battle.turnPoints,battle.radius,myTurn,me]);
- useEffect(()=>{setMode('inspect');setSelected(null);},[battle.turnAccountId,battle.round]);
+ useEffect(()=>{setMode('inspect');setSelected(null);setMovePreview(null);},[battle.turnAccountId,battle.round]);
+ useEffect(()=>{if(movePreview&&!reachable.has(`${movePreview.q},${movePreview.r}`)){setMovePreview(null);setSelected(null);}},[movePreview,reachable]);
  const [visual,setVisual]=useState<Record<string,Hex>>(()=>Object.fromEntries(battle.actors.map(a=>[a.accountId,a])));
  const paths=useRef(new Map<string,Hex[]>()),seenEvent=useRef(Math.max(0,...battle.events.map(e=>e.id)));
  useEffect(()=>{
@@ -36,6 +37,8 @@ export function BattleView({battle,me,connected,clock,onChanged,onMessage}:{batt
  },[battle.actors,battle.events]);
  useEffect(()=>{const timer=setInterval(()=>{for(const [id,path] of paths.current){const next=path.shift();if(next)setVisual(v=>({...v,[id]:next}));if(!path.length)paths.current.delete(id);}},110);return()=>clearInterval(timer);},[]);
  const enabled=connected&&myTurn&&!busy;
+ const pendingAttack=battle.intents.find(i=>i.attackerId===me);
+ const previewPath=movePreview?reachable.get(`${movePreview.q},${movePreview.r}`):undefined;
  const ownEdges=own?sides(own,battle.radius):[];
  const recentAttack=[...battle.events].reverse().find(e=>e.kind==='attack'&&clock-e.happenedAt<1250);
  const notice=[...battle.events].reverse().find(e=>clock-e.happenedAt<5000&&['withdraw-interrupted','withdraw-blocked','attack','miss'].includes(e.kind));
@@ -44,10 +47,21 @@ export function BattleView({battle,me,connected,clock,onChanged,onMessage}:{batt
  const span=890/zoom;
  async function command(path:string,body:object){if(busy)return;setBusy(true);try{await api('/battle/'+path,{battleId:battle.id,...body});await onChanged();}catch(e){onMessage((e as Error).message);}finally{setBusy(false);}}
  function choose(h:Hex){
-   if(drag.current?.moved)return;setSelected(h);
+   if(drag.current?.moved)return;
+   if(mode==='move'){
+     if(movePreview){
+       if(enabled&&movePreview.q===h.q&&movePreview.r===h.r&&reachable.has(`${h.q},${h.r}`)){
+         setMovePreview(null);setSelected(h);void command('step',h);
+       }else{setMovePreview(null);setSelected(null);}
+       return;
+     }
+     setSelected(h);
+     if(enabled&&reachable.has(`${h.q},${h.r}`))setMovePreview(h);
+     return;
+   }
+   setSelected(h);
    if(!enabled)return;
-   if(mode==='move'&&reachable.has(`${h.q},${h.r}`))void command('step',h);
-   if(mode==='attack'&&own&&distance(own,h)===1&&!battle.attackUsed&&battle.turnPoints>=2){setMode('inspect');void command('attack',h);}
+   if(mode==='attack'&&own&&distance(own,h)===1&&battle.turnPoints>=2){setMode('inspect');void command('attack',h);}
  }
  function locate(h:Hex){setSelected(h);setCenter(xy(h));setZoom(1.5);}
  return <section className="battle-surface" aria-label="局部战场">
@@ -62,16 +76,17 @@ export function BattleView({battle,me,connected,clock,onChanged,onMessage}:{batt
  {chosen&&<polygon className="selected-ring" points={polygon(h,SIZE-2)} pointerEvents="none"/>}
  <g pointerEvents="none" opacity={outer?.42:1} transform={`translate(${p.x} ${p.y})`}><path d="M-19 12h3v-5m0 5h4v-3M12-18h3v-4m0 4h4v-2" stroke="#72965e" strokeWidth="2" fill="none"/><path d="M-10-15h5v2h-5M15 15h4v2h-4" fill="#e0dda0"/>{!outer&&n%9===0?<g opacity={occupied?.35:1} transform="translate(10 -2) scale(.9)"><Tree/></g>:!outer&&n%7===0?<g transform="translate(12 5) scale(.85)"><Rock/></g>:null}{outer&&<text className="edge-cell-label" y="5">{edge.map(d=>battle.edges[d].walkable?['→','↘','↙','←','↖','↗'][d]:'×').join(' ')}</text>}</g>
  {marked&&<polygon className="battle-intent-ring" points={polygon(h,SIZE-4)} pointerEvents="none"/>}</g>;})}
+ {previewPath&&own&&<g className="move-preview-route" pointerEvents="none"><polyline className="move-preview-shadow" points={[own,...previewPath].map(h=>{const p=xy(h);return `${p.x},${p.y}`;}).join(' ')}/><polyline className="move-preview-line" points={[own,...previewPath].map(h=>{const p=xy(h);return `${p.x},${p.y}`;}).join(' ')}/>{previewPath.map((h,i)=><polygon key={`${h.q},${h.r}`} className={'move-preview-step '+(i===previewPath.length-1?'destination':'')} points={polygon(h,SIZE-7)}/>)}</g>}
  {battle.edges.map(e=>{const a=e.direction*Math.PI/3,p={x:Math.cos(a)*405,y:Math.sin(a)*405};return <g key={e.direction} transform={`translate(${p.x} ${p.y})`} className={'battle-side-label '+(!e.walkable?'blocked':'')} pointerEvents="none"><rect x="-49" y="-16" width="98" height="40" rx="7"/><text textAnchor="middle" y="0">{e.name} · {e.walkable?e.battleId?'另一战场':'可撤离':'不可通行'}</text><text textAnchor="middle" y="15" className="destination">{e.destination}</text></g>;})}
- {[...battle.actors].sort((a,b)=>xy(a).y-xy(b).y).map(a=>{const p=xy(visual[a.accountId]||a),active=a.accountId===battle.turnAccountId;return <g key={a.accountId} transform={`translate(${p.x} ${p.y})`} className={'battle-actor '+(!a.online?'offline':'')} onClick={()=>choose(a)} style={{cursor:'pointer',transition:'transform 110ms linear'}}>{mode==='move'&&a.accountId===me&&<ellipse cy="12" rx="21" ry="9" fill="none" stroke={active?'#fff1aa':a.accountId===me?'#71c4d0':'#72836a'} strokeWidth={active?3:2}/>}<Sprite color={a.color}/><text className="battle-actor-name" y="-35">{a.username}{a.accountId===me?' · 你':''}</text>{a.withdrawDirection!=null&&<text className="battle-wait-label" y="29">正在撤离…</text>}{!a.online&&<text className="battle-wait-label" y="40">离线</text>}</g>;})}
+ {[...battle.actors].sort((a,b)=>xy(a).y-xy(b).y).map(a=>{const p=xy(visual[a.accountId]||a),active=a.accountId===battle.turnAccountId;return <g key={a.accountId} transform={`translate(${p.x} ${p.y})`} className={'battle-actor '+(!a.online?'offline':'')} pointerEvents="none" style={{transition:'transform 110ms linear'}}>{mode==='move'&&a.accountId===me&&<ellipse cy="12" rx="21" ry="9" fill="none" stroke={active?'#fff1aa':a.accountId===me?'#71c4d0':'#72836a'} strokeWidth={active?3:2}/>}<Sprite color={a.color}/><text className="battle-actor-name" y="-35">{a.username}{a.accountId===me?' · 你':''}</text>{a.withdrawDirection!=null&&<text className="battle-wait-label" y="29">正在撤离…</text>}{!a.online&&<text className="battle-wait-label" y="40">离线</text>}</g>;})}
  {recentAttack&&<g key={recentAttack.id} transform={`translate(${xy({q:recentAttack.q!,r:recentAttack.r!}).x} ${xy({q:recentAttack.q!,r:recentAttack.r!}).y})`} pointerEvents="none"><path className="battle-attack-flash" d="M-22 20L22-25M-16-22L18 19" stroke="#fff1c0" strokeWidth="7"/></g>}
  </svg>
  <div className="battle-tools"><button title="放大战场" aria-label="放大战场" onClick={()=>setZoom(z=>Math.min(2.8,z*1.2))}><Plus size={18}/></button><button title="缩小战场" aria-label="缩小战场" onClick={()=>setZoom(z=>Math.max(.65,z/1.2))}><Minus size={18}/></button><button title="查看全场" aria-label="查看全场" onClick={()=>{setCenter({x:0,y:0});setZoom(.8);}}><Maximize size={18}/></button><button title="定位自己" aria-label="定位自己" onClick={()=>own&&locate(own)}><LocateFixed size={18}/></button></div>
  <div className="battle-action-dock" aria-label="战斗操作栏"><div className="action-points"><strong>{myTurn?battle.turnPoints:'—'}</strong><small>行动点</small></div>
- <button className={mode==='move'?'chosen':''} aria-pressed={mode==='move'} disabled={!enabled||battle.turnPoints<1} onClick={()=>setMode(m=>m==='move'?'inspect':'move')}><Footprints size={23}/><span>移动<small>每格 1 点</small></span></button>
- <button className={'attack-mode '+(mode==='attack'?'chosen':'')} aria-pressed={mode==='attack'} disabled={!enabled||battle.attackUsed||battle.turnPoints<2} onClick={()=>setMode(m=>m==='attack'?'inspect':'attack')}><Swords size={23}/><span>攻击<small>{battle.attackUsed?'本回合已预设':'预设 · 2 点'}</small></span></button>
- <button className="end-turn" disabled={!enabled} onClick={()=>{setMode('inspect');void command('end-turn',{});}}><SkipForward size={22}/><span>结束回合<small>交给下一位</small></span></button></div>
- <div className="battle-actions"><div className="battle-selection">{own?.withdrawDirection!=null?'正在等待撤离':own&&own.entryRound>battle.round?'下一轮开始行动':mode==='move'?`选择白色范围内的空格 · 剩余 ${battle.turnPoints} 点`:mode==='attack'?'选择相邻格预设攻击 · 空格也可选择':selected?`${target?.username||'草地'} · ${selected.q}, ${selected.r}`:'先选择下方的移动或攻击'}</div>
+ <button className={mode==='move'?'chosen':''} aria-pressed={mode==='move'} disabled={!enabled||battle.turnPoints<1} onClick={()=>{setMovePreview(null);setSelected(null);setMode(m=>m==='move'?'inspect':'move');}}><Footprints size={23}/><span>移动<small>每格 1 点</small></span></button>
+ <button className={'attack-mode '+(mode==='attack'?'chosen':'')} aria-pressed={mode==='attack'} disabled={!enabled||battle.turnPoints<2} onClick={()=>{setMovePreview(null);setSelected(null);setMode(m=>m==='attack'?'inspect':'attack');}}><Swords size={23}/><span>攻击<small>{pendingAttack?'改选预设 · 2 点':'预设 · 2 点'}</small></span></button>
+ <button className="end-turn" disabled={!enabled} onClick={()=>{setMovePreview(null);setMode('inspect');void command('end-turn',{});}}><SkipForward size={22}/><span>结束回合<small>交给下一位</small></span></button></div>
+ <div className="battle-actions"><div className="battle-selection">{own?.withdrawDirection!=null?'正在等待撤离':own&&own.entryRound>battle.round?'下一轮开始行动':mode==='move'?previewPath?`路线 ${previewPath.length} 格 · 消耗 ${previewPath.length} 点 · 余 ${battle.turnPoints-previewPath.length} 点；再点同一格移动，点其他格取消`:`选择白色范围内的空格预览路线 · 剩余 ${battle.turnPoints} 点`:mode==='attack'?pendingAttack?'选择相邻格替换红格 · 再消耗 2 点':'选择相邻格预设攻击 · 空格也可选择':selected?`${target?.username||'草地'} · ${selected.q}, ${selected.r}`:'先选择下方的移动或攻击'}</div>
  {ownEdges.length>0&&<div className="withdraw-options">{ownEdges.map(d=>{const e=battle.edges[d];return <div className="withdraw-row" key={d}><span><b>{e.name} → {e.destination}</b><small>{!e.walkable?'此方向不可通行':e.battleId?'注意：将进入另一场战斗':'返回相邻大世界格'}</small></span><button disabled={!enabled||!e.walkable} onClick={()=>void command('withdraw',{direction:d,force:false})}><LogOut size={13}/>准备撤离</button><button disabled={!enabled||!e.walkable||!battle.turnStartEdge||battle.turnPoints!==6} onClick={()=>void command('withdraw',{direction:d,force:true})} title="回合开始已在外圈，花费完整6点立即离开">强退 · 6 点</button></div>;})}</div>}
  <div className="battle-feedback" role="status" aria-live="polite">{noticeText}</div><div className="battle-quiet">{ownEdges.length?'普通撤离会立即结束本回合；强制撤离需回合开始已在外圈。':'红格：进入不触发，离开或攻击到期时结算'}</div></div>
  </section>;

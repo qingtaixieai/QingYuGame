@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { Application, Container, Graphics, Text } from 'pixi.js';
 // Pixi's official non-eval polyfills keep WebGL rendering compatible with production CSP.
 import 'pixi.js/unsafe-eval';
 import type { Hex, Player, Tile, World, ResourceNode, WorldAction, Emote, BattleSummary, FerryState } from './types';
 import {emoteArt,emotePalette} from './emotes';
 import { key } from './types';
+import {ferryRouteProgress} from './ferryMotion';
 
 const SIZE=25, SQRT3=Math.sqrt(3);
 export const position=(h:Hex)=>({x:SQRT3*SIZE*(h.q+h.r/2),y:1.5*SIZE*h.r});
@@ -37,16 +38,18 @@ function ruin(g:Graphics,x:number,y:number){
   pixel(g,x-12,y+8,10,3,0x7d9b61);pixel(g,x+3,y+5,6,4,0x7d9b61);
 }
 export type MapControls={zoom:(factor:number)=>void;fit:()=>void;locate:(h:Hex)=>void};
-type Props={ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
-export function MapView(props:Props){
-  const host=useRef<HTMLDivElement>(null), latest=useRef(props);
+type Props={active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
+export const MapView=memo(function MapView(props:Props){
+  const host=useRef<HTMLDivElement>(null), latest=useRef(props), application=useRef<Application|null>(null);
   latest.current=props;
+  useEffect(()=>{if(application.current){if(props.active)application.current.ticker.start();else application.current.ticker.stop();}},[props.active]);
   useEffect(()=>{
     let disposed=false,cleanup=()=>{};
     const app=new Application();
     async function init(){
       await app.init({resizeTo:host.current!,background:0xa5cdd0,antialias:false,resolution:Math.min(devicePixelRatio,2),autoDensity:true,preference:'webgl'});
       if(disposed||!host.current){app.destroy(true,{children:true});return;}
+      application.current=app;
       host.current!.appendChild(app.canvas);
       const scene=new Container(),ground=new Graphics(),roads=new Graphics(),decor=new Graphics(),markers=new Container(),selection=new Graphics(),routeLine=new Graphics(),actors=new Container();
       app.stage.addChild(scene);const resourceLayer=new Container(),effects=new Container(),battleMarks=new Container();
@@ -82,6 +85,7 @@ export function MapView(props:Props){
       }
       for(const [title,x,y] of [['西 静 海',-625,80],['东 风 海',590,-40]] as const){const label=new Text({text:title,style:{fontFamily:'serif',fontSize:20,fill:0x659b9f,letterSpacing:8}});label.anchor.set(.5);label.position.set(x,y);scene.addChild(label);}
       const seaLine=new Graphics(),boat=new Container(),hull=new Graphics(),boatLabel=new Text({text:'',style:{fontFamily:'Microsoft YaHei',fontSize:10,fontWeight:'bold',fill:0x34574e,stroke:{color:0xfff3d5,width:3}}});
+      boat.visible=false;
       boatLabel.anchor.set(.5);boatLabel.y=-36;boat.addChild(hull,boatLabel);scene.addChild(seaLine,boat);
       pixel(hull,-19,4,38,5,0x6e5945);pixel(hull,-15,9,30,5,0x84684c);pixel(hull,-10,14,20,3,0x94734d);pixel(hull,-13,2,26,5,0xd3b17a);pixel(hull,-1,-28,3,34,0x6f6551);pixel(hull,3,-25,15,20,0xfff0cf);pixel(hull,3,-25,10,4,0xdca55b);pixel(hull,-12,-16,11,15,0xf0ddb0);
       let seaDrawn=false;
@@ -105,9 +109,11 @@ export function MapView(props:Props){
       }
       function wheel(e:WheelEvent){e.preventDefault();const rect=canvas.getBoundingClientRect();zoomAt(Math.exp(-e.deltaY*.0012),e.clientX-rect.left,e.clientY-rect.top);}
       canvas.style.cursor='grab';canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',()=>{start=null;});canvas.addEventListener('wheel',wheel,{passive:false});
-      const entities=new Map<string,{container:Container;body:Graphics;bar:Graphics;bubble:Graphics;emoteCode:string;label:Text;battleTag:Text;target:{x:number;y:number};color:string;online:boolean;inBattle:boolean}>();
+      const entities=new Map<string,{container:Container;body:Graphics;bar:Graphics;barPixels:number;bubble:Graphics;emoteCode:string;label:Text;battleTag:Text;target:{x:number;y:number};color:string;online:boolean;inBattle:boolean}>();
       let previousPlayers:Player[]|null=null,previousSelected:Tile|null|undefined,previousRoute:Hex[]|null=null;
-      const resourceSprites=new Map<string,{g:Graphics;readyAt:number;q:number;r:number}>();
+      const resourceSprites=new Map<string,{g:Graphics;readyAt:number;q:number;r:number;x:number;y:number}>();
+      let previousResources:ResourceNode[]|null=null,previousActions:WorldAction[]|null=null,workingNodes=new Set<string>();
+      let previousFerry:FerryState|null=null,boatRoute:{x:number;y:number}[]=[],boatRouteIndex=0,boatLabelText='';
       const animations:{container:Container;start:number;x:number;y:number;stone?:Graphics}[]=[];
       function reward(n:ResourceNode){const p=position(n),c=new Container();c.position.set(p.x,p.y);effects.addChild(c);
         const label=new Text({text:n.kind==='stone'?'石头 +1':'木头 +1',style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:12,fontWeight:'bold',fill:0x345d43,stroke:{color:0xfff8da,width:3}}});label.anchor.set(.5);label.y=-24;c.addChild(label);
@@ -116,31 +122,48 @@ export function MapView(props:Props){
       }
       app.ticker.add(ticker=>{
         const current=latest.current,now=Date.now()+current.clockOffset;
-        const ferry=current.ferry;boat.visible=!!ferry?.built;
-        if(ferry){
-          if(!seaDrawn){seaDrawn=true;for(const h of ferry.route){const p=position(h);seaLine.circle(p.x,p.y,2).fill({color:0xf4ead0,alpha:.65});}}
-          const p=position(ferry);if(ferry.built&&(ferry.phase==='outbound'||ferry.phase==='inbound')){const i=ferry.route.findIndex(h=>key(h)===key(ferry)),next=ferry.route[i+(ferry.phase==='outbound'?1:-1)];if(next){const n=position(next),step=ferry.travelMs/Math.max(1,ferry.route.length-1),f=Math.max(0,Math.min(1,1-(ferry.nextAt-now)/step));p.x+=(n.x-p.x)*f;p.y+=(n.y-p.y)*f;}}
-          boat.position.set(p.x,p.y+Math.sin(now/450)*.8);boatLabel.text=(ferry.passengerIds.includes(current.me)?'你在船上 · ':'望潮渡船 · ')+ferry.passengerIds.length+' 人';
+        const ferry=current.ferry;
+        if(ferry!==previousFerry){
+          previousFerry=ferry;boat.visible=!!ferry?.built;
+          if(ferry){
+            if(!seaDrawn){seaDrawn=true;for(const h of ferry.route){const p=position(h);seaLine.circle(p.x,p.y,2).fill({color:0xf4ead0,alpha:.65});}}
+            boatRoute=ferry.route.map(position);boatRouteIndex=Math.max(0,ferry.route.findIndex(h=>key(h)===key(ferry)));
+            const label=(ferry.passengerIds.includes(current.me)?'你在船上 · ':'望潮渡船 · ')+ferry.passengerIds.length+' 人';
+            if(label!==boatLabelText){boatLabelText=label;boatLabel.text=label;}
+          }
+        }
+        if(ferry&&boatRoute.length){
+          const progress=ferryRouteProgress(ferry,boatRouteIndex,boatRoute.length,now),i=Math.floor(progress),f=progress-i,a=boatRoute[i],b=boatRoute[Math.min(i+1,boatRoute.length-1)];
+          boat.position.set(a.x+(b.x-a.x)*f,a.y+(b.y-a.y)*f+Math.sin(now/450)*.8);
         }
         const nextBattleSignature=current.battles.map(b=>b.id+":"+b.participants).join("|");
         if(nextBattleSignature!==battleSignature){battleSignature=nextBattleSignature;battleMarks.removeChildren().forEach(c=>c.destroy());
           for(const battle of current.battles){const p=position(battle),mark=new Graphics();hex(mark,p.x,p.y,SIZE-1).fill({color:0xa95042,alpha:.22}).stroke({color:0xb65546,width:2});battleMarks.addChild(mark);
             const label=new Text({text:'⚔ 战斗封锁',style:{fontFamily:'Microsoft YaHei',fontSize:9,fill:0x8b3d32,fontWeight:'bold',stroke:{color:0xfff0d1,width:2}}});label.anchor.set(.5);label.position.set(p.x,p.y+20);battleMarks.addChild(label);}
         }
-        const nodeIds=new Set(current.resources.map(n=>n.id));
-        for(const [id,entry]of resourceSprites)if(!nodeIds.has(id)){entry.g.destroy();resourceSprites.delete(id);}
-        for(const n of current.resources){
-          let entry=resourceSprites.get(n.id);const p=position(n);
-          if(!entry){const g=new Graphics();resourceLayer.addChild(g);entry={g,readyAt:-1,q:n.q,r:n.r};resourceSprites.set(n.id,entry);}
-          if(entry.readyAt!==n.readyAt||entry.q!==n.q||entry.r!==n.r){
-            if(entry.readyAt===0&&n.readyAt>0)reward(n);
-            entry.readyAt=n.readyAt;entry.q=n.q;entry.r=n.r;const g=entry.g;g.clear();
-            if(n.kind==='wood'){if(n.readyAt>0){pixel(g,-7,0,14,8,0x896447);pixel(g,-8,-2,16,4,0xd6b480);pixel(g,-4,-1,8,2,0x9c7b51);}else{tree(g,-8,3,0);tree(g,8,-4,1);}}
-            else if(n.readyAt===0){pixel(g,-7,0,14,6,0x8b9c8b);pixel(g,-5,-4,10,6,0xc8d0b5);pixel(g,-3,-4,5,2,0xe6e7cf);}
+        if(current.resources!==previousResources){
+          previousResources=current.resources;
+          const nodeIds=new Set(current.resources.map(n=>n.id));
+          for(const [id,entry]of resourceSprites)if(!nodeIds.has(id)){entry.g.destroy();resourceSprites.delete(id);}
+          for(const n of current.resources){
+            let entry=resourceSprites.get(n.id);
+            if(!entry){const g=new Graphics();resourceLayer.addChild(g);entry={g,readyAt:-1,q:n.q,r:n.r,x:0,y:0};resourceSprites.set(n.id,entry);}
+            if(entry.readyAt!==n.readyAt||entry.q!==n.q||entry.r!==n.r){
+              if(entry.readyAt===0&&n.readyAt>0)reward(n);
+              entry.readyAt=n.readyAt;entry.q=n.q;entry.r=n.r;const g=entry.g;g.clear();
+              if(n.kind==='wood'){if(n.readyAt>0){pixel(g,-7,0,14,8,0x896447);pixel(g,-8,-2,16,4,0xd6b480);pixel(g,-4,-1,8,2,0x9c7b51);}else{tree(g,-8,3,0);tree(g,8,-4,1);}}
+              else if(n.readyAt===0){pixel(g,-7,0,14,6,0x8b9c8b);pixel(g,-5,-4,10,6,0xc8d0b5);pixel(g,-3,-4,5,2,0xe6e7cf);}
+              const p=position(n);entry.x=p.x;entry.y=p.y;g.position.set(p.x,p.y);
+            }
           }
-          const working=current.actions.some(a=>a.nodeId===n.id);
-          entry.g.position.set(p.x+(working?Math.sin(now/65)*1.6:0),p.y);
         }
+        if(current.actions!==previousActions){
+          previousActions=current.actions;
+          const nextWorking=new Set(current.actions.map(a=>a.nodeId));
+          for(const id of workingNodes)if(!nextWorking.has(id)){const entry=resourceSprites.get(id);if(entry)entry.g.x=entry.x;}
+          workingNodes=nextWorking;
+        }
+        for(const id of workingNodes){const entry=resourceSprites.get(id);if(entry)entry.g.x=entry.x+Math.sin(now/65)*1.6;}
         for(let i=animations.length-1;i>=0;i--){const a=animations[i],elapsed=(performance.now()-a.start)/1100;if(elapsed>=1){a.container.destroy({children:true});animations.splice(i,1);continue;}a.container.y=a.y-elapsed*22;a.container.alpha=1-elapsed;if(a.stone)a.stone.scale.set(Math.max(0,1-elapsed*3));}
 
         if(current.players!==previousPlayers){
@@ -151,7 +174,7 @@ export function MapView(props:Props){
           for(const p of current.players){
             const count=counts.get(key(p))||0;counts.set(key(p),count+1);const pos=position(p);pos.x+=(count%3-1)*9;pos.y+=Math.floor(count/3)*9;
             let entity=entities.get(p.id);
-            if(!entity){const container=new Container(),body=new Graphics(),bar=new Graphics(),bubble=new Graphics(),label=new Text({text:p.username,style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:10,fill:0x254c41,stroke:{color:0xfff9e6,width:3}}}),battleTag=new Text({text:'战斗中',style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:12,fontWeight:'bold',fill:0xa44536,stroke:{color:0xfff6dc,width:4}}});label.anchor.set(.5);label.y=-28;battleTag.anchor.set(.5);battleTag.y=-43;battleTag.visible=p.inBattle;bubble.y=-68;container.addChild(body,label,battleTag,bar,bubble);actors.addChild(container);container.position.set(pos.x,pos.y);entity={container,body,bar,bubble,emoteCode:'',label,battleTag,target:pos,color:'',online:!p.online,inBattle:!p.inBattle};entities.set(p.id,entity);}
+            if(!entity){const container=new Container(),body=new Graphics(),bar=new Graphics(),bubble=new Graphics(),label=new Text({text:p.username,style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:10,fill:0x254c41,stroke:{color:0xfff9e6,width:3}}}),battleTag=new Text({text:'战斗中',style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:12,fontWeight:'bold',fill:0xa44536,stroke:{color:0xfff6dc,width:4}}});label.anchor.set(.5);label.y=-28;battleTag.anchor.set(.5);battleTag.y=-43;battleTag.visible=p.inBattle;bubble.y=-68;container.addChild(body,label,battleTag,bar,bubble);actors.addChild(container);container.position.set(pos.x,pos.y);entity={container,body,bar,barPixels:-1,bubble,emoteCode:'',label,battleTag,target:pos,color:'',online:!p.online,inBattle:!p.inBattle};entities.set(p.id,entity);}
             entity.target=pos;entity.container.visible=!current.ferry?.passengerIds.includes(p.id);
             if(entity.color!==p.color||entity.online!==p.online||entity.inBattle!==p.inBattle){entity.color=p.color;entity.online=p.online;entity.inBattle=p.inBattle;const g=entity.body;g.clear();g.ellipse(0,8,9,4).fill({color:0x365443,alpha:.25});
               if(p.id===current.me)g.circle(0,2,14).stroke({color:0xfdf7d1,width:2});
@@ -164,15 +187,18 @@ export function MapView(props:Props){
         for(const [id,entity] of entities){
           const emote=current.emotes.find(e=>e.accountId===id&&e.expiresAt>now);entity.bubble.visible=!!emote;
           if(emote){if(entity.emoteCode!==emote.code){entity.emoteCode=emote.code;const g=entity.bubble;g.clear();g.poly([-19,-18,19,-18,19,-15,22,-15,22,12,19,12,19,15,5,15,0,20,-3,15,-19,15,-19,12,-22,12,-22,-15,-19,-15]).fill(0xfff9e5).stroke({color:0x607753,width:1.5});const art=emoteArt.find(a=>a.code===emote.code);art?.pixels.forEach((row,y)=>[...row].forEach((c,x)=>{if(c!=='.')pixel(g,x*2-12,y*2-13,2,2,Number.parseInt(emotePalette[c].slice(1),16));}));}entity.bubble.alpha=Math.min(1,(emote.expiresAt-now)/250);}
-          const action=current.actions.find(a=>a.accountId===id);entity.bar.clear();if(action){const progress=Math.max(0,Math.min(1,(now-action.startedAt)/(action.endsAt-action.startedAt)));entity.bar.roundRect(-19,-43,38,6,2).fill(0x354d40);entity.bar.roundRect(-18,-42,36*progress,4,1).fill(0xe8c875);}const f=Math.min(1,ticker.deltaMS/100);entity.container.x+=(entity.target.x-entity.container.x)*f;entity.container.y+=(entity.target.y-entity.container.y)*f;}
+          const action=current.actions.find(a=>a.accountId===id),barPixels=action?Math.round(36*Math.max(0,Math.min(1,(now-action.startedAt)/(action.endsAt-action.startedAt)))):-1;
+          if(barPixels!==entity.barPixels){entity.barPixels=barPixels;entity.bar.clear();if(action){entity.bar.roundRect(-19,-43,38,6,2).fill(0x354d40);entity.bar.roundRect(-18,-42,barPixels,4,1).fill(0xe8c875);}}
+          const f=Math.min(1,ticker.deltaMS/100);entity.container.x+=(entity.target.x-entity.container.x)*f;entity.container.y+=(entity.target.y-entity.container.y)*f;}
         if(previousSelected!==current.selected){selection.clear();previousSelected=current.selected;if(current.selected){const p=position(current.selected);hex(selection,p.x,p.y,SIZE-1).fill({color:0xfff3be,alpha:.22}).stroke({color:0xfff5cd,width:2.2});}}
         if(previousRoute!==current.route||previousPlayers!==current.players){previousRoute=current.route;routeLine.clear();for(const h of current.route){const p=position(h);routeLine.circle(p.x,p.y,2.5).fill(0xfdf8df);}}
       });
       const resize=new ResizeObserver(()=>{if(disposed||!host.current)return;const w=host.current.clientWidth,h=host.current!.clientHeight,dx=w-app.screen.width,dy=h-app.screen.height,wasFit=Math.abs(zoom-fitScale)<.001;app.renderer.resize(w,h);if(wasFit)fit();else{fitScale=Math.min(w/mapWidth,h/mapHeight);scene.x+=dx/2;scene.y+=dy/2;report();}});resize.observe(host.current!);
-      cleanup=()=>{resize.disconnect();canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);props.controls.current=null;app.destroy(true,{children:true});};
+      if(!latest.current.active)app.ticker.stop();
+      cleanup=()=>{resize.disconnect();canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);props.controls.current=null;application.current=null;app.destroy(true,{children:true});};
     }
     init().catch(e=>{console.error(e);if(host.current)host.current.innerHTML='<div class="map-error">画面初始化失败，请开启浏览器硬件加速后刷新。</div>';});
     return()=>{disposed=true;cleanup();};
   },[props.world.version]);
   return <div className="map-canvas" ref={host} aria-label="大陆地图，拖动平移，滚轮缩放，点击选择地块"/>;
-}
+});
