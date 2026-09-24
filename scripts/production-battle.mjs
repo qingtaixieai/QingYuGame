@@ -22,6 +22,14 @@ try{
  const players=(await call('/players',undefined,a.cookie)).data.players;assert(players.filter(p=>p.q===cell.q&&p.r===cell.r).every(p=>users.some(u=>u.data.id===p.id)));
  const battle=(await call('/battle/start',{targetId:b.data.id,version:world.version},a.cookie)).data.id;
  let state=(await call('/battle/current',undefined,a.cookie)).data;assert.equal(state.actors.length,2);assert(state.actors.every(h=>Math.max(Math.abs(h.q),Math.abs(h.r),Math.abs(h.q+h.r))<state.radius));assert.equal(state.edges.length,6);passed('Production offline target and interior random spawn');
+ const own=state.actors.find(x=>x.accountId===a.data.id),occupied=new Set(state.actors.map(x=>`${x.q},${x.r}`)),distance=h=>Math.max(Math.abs(h.q),Math.abs(h.r),Math.abs(h.q+h.r));
+ const direction=[[1,0],[0,1],[-1,1],[-1,0],[0,-1],[1,-1]].find(([q,r])=>[1,-1,-2].every(n=>distance({q:own.q+q*n,r:own.r+r*n})<=state.radius&&!occupied.has(`${own.q+q*n},${own.r+r*n}`)));assert(direction);
+ const [dq,dr]=direction;await call('/battle/attack',{battleId:battle,q:own.q+dq,r:own.r+dr},a.cookie);
+ state=(await call('/battle/current',undefined,a.cookie)).data;assert.equal(state.intents.length,1);assert.equal(state.turnPoints,4);
+ await call('/battle/step',{battleId:battle,q:own.q-2*dq,r:own.r-2*dr},a.cookie);
+ state=(await call('/battle/current',undefined,a.cookie)).data;assert.equal(state.intents.length,0);assert.equal(state.turnPoints,2);assert(state.events.some(e=>e.kind==='miss'&&e.actorId===a.data.id));passed('Production empty-cell attack and multi-cell move resolve once with correct action costs');
+ const ferry=(await call('/players',undefined,a.cookie)).data.ferry,tiles=new Map(world.tiles.map(t=>[`${t.q},${t.r}`,t]));assert.equal(tiles.get(`${ferry.mainlandPort.q},${ferry.mainlandPort.r}`).place.type,'port');assert.equal(tiles.get(`${ferry.islandLanding.q},${ferry.islandLanding.r}`).place.type,'landing');assert(ferry.route.length>2&&ferry.route.every(h=>tiles.get(`${h.q},${h.r}`).terrain==='ocean'));passed('Production fixed ocean route and both ferry stops available');
+
  await call('/move',{q:cell.q,r:cell.r,version:world.version},c.cookie,400);await call('/move',{q:cell.q,r:cell.r,version:world.version},a.cookie,400);passed('Production world blockade and combat action lock');
  await call('/battle/join',{battleId:battle,version:world.version},c.cookie);state=(await call('/battle/current',undefined,c.cookie)).data;const newcomer=state.actors.find(x=>x.accountId===c.data.id);assert.equal(newcomer.q,state.radius);assert.equal(newcomer.entryRound,state.round+1);passed('Production directional reinforcement waits until next round');
  writeFileSync(new URL('../.local/production-battle-report.json',import.meta.url),JSON.stringify({date:new Date().toISOString(),checks},null,2));

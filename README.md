@@ -123,3 +123,20 @@
 - 视觉夹具：`node scripts/battle-visual-fixture.mjs`；测试凭据仅保存到忽略目录`.local/battle-visual.json`。重启检查依次运行`battle-edges-restart.mjs prepare`、重启本地服务、`battle-edges-restart.mjs verify`。视觉夹具使用后按其中精确ID清理。
 - 正式更新脚本`deploy/update-battle.sh`先备份数据库、旧JAR及网页入口，再迁移、检查健康并更新网页。最新备份：`/opt/qingyu/backups/battle-20260924-004606/`。
 - 公网验收`scripts/production-battle.mjs`先创建临时账号，再通过`deploy/prepare-battle-smoke.py`移至远离现有玩家的空地；最后调用`deploy/cleanup-production-battle.py`按精确ID校验清理。三个Python/更新脚本需先复制至服务器`/home/ubuntu/`。
+
+
+## 战斗操作与渡船探索（2026-09-24）
+
+战斗底部操作栏分别开启移动与攻击模式。移动范围按剩余行动点及占用格动态计算，一次点击可沿最短路移动多格，每格1点。范围提示只在对应模式显示；结束回合后收起。顺序条非当前卡片整体灰显，当前卡片放大，切换时平滑缩放。
+
+普通攻击消耗2点，每回合至多预设一次，目标为相邻格（允许空格）。进入红格不会触发；其他角色离开红格、攻击者走出与红格相邻的范围、或攻击者下一次正常回合到来时，结算同一次预设攻击并清除。格内无人则落空，不能攻击自己。本阶段仍不计算血量或伤害。多格移动会逐格处理攻击触发。
+
+首次启动新版时，旧大陆向外扩展至半径34，在新海域生成一座随机方向、随机内部地形的岛屿，并在可从出生点步行到达的旧海岸增加望潮港。旧地形、道路、地点与玩家坐标保留。全地图可见；港口与远屿浅滩之间的海路固定。
+
+玩家在港口共同投入木头和石头建造公共渡船，材料达到要求后自动开航。渡船不限人数，空船也往返；两岸停靠时手动上下船，离线仍在船上。船上不能移动、采集、发起/加入战斗或发送地图表情，聊天仍可用。停靠点正在战斗时暂时不能下船。服务停止期间航行计时暂停，最多约1秒的存档间隔误差。
+
+可通过 Java 系统属性配置试玩数值：`game.ferry.wood=8`、`game.ferry.stone=4`、`game.ferry.dwell-ms=30000`、`game.ferry.step-ms=2500`。造船消耗不退还，超过缺口的请求仅投入实际所需且背包拥有的数量。管理员重建世界会同时重置造船与乘客状态，背包沿用原有保留规则。
+
+数据库 V6 保存渡船工程、航行阶段与乘客，并将攻击预设改为按格结算。API 新增 `/ferry/contribute`、`/ferry/board`、`/ferry/disembark`；所有操作验证世界版本、权限与角色状态。`/battle/attack` 使用 `battleId,q,r`，仍兼容旧客户端的 `targetId`。
+
+本地联测：`node scripts/expedition-smoke.mjs`（仅使用本地测试数据库与临时账号；建议启动时用 `-Dgame.ferry.dwell-ms=1500 -Dgame.ferry.step-ms=350` 缩短等待）。脚本拒绝在有原有乘客时重置渡船测试状态，并在结束后恢复造船状态。扩图保留性由 `ExpansionTest` 覆盖；若本地存在扩图前快照 `.local/expansion-before.json`，联测还会核对真实迁移结果。

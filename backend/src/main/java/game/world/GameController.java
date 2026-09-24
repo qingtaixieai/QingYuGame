@@ -20,7 +20,7 @@ public class GameController {
     record BattleStart(UUID targetId,String version) {}
     record BattleJoin(UUID battleId,String version) {}
     record BattleStep(UUID battleId,Integer q,Integer r) {}
-    record BattleAttack(UUID battleId,UUID targetId) {}
+    record BattleAttack(UUID battleId,UUID targetId,Integer q,Integer r) {}
     record BattleTurn(UUID battleId) {}
     record BattleWithdraw(UUID battleId,Integer direction,boolean force) {}
     @GetMapping("/health") public Map<String,String> health(){return Map.of("status","ok");}
@@ -60,8 +60,8 @@ public class GameController {
         world.battleStep(accounts.require(req,true,false).id(),body.battleId(),body.q(),body.r());return Map.of("message","已移动");
     }
     @PostMapping("/battle/attack") public Map<String,String> battleAttack(@RequestBody BattleAttack body,HttpServletRequest req){
-        if(body.battleId()==null||body.targetId()==null)throw AccountService.bad("请选择攻击目标");
-        world.battleAttack(accounts.require(req,true,false).id(),body.battleId(),body.targetId());return Map.of("message","已标记攻击格");
+        if(body.battleId()==null||body.targetId()==null&&(body.q()==null||body.r()==null))throw AccountService.bad("请选择攻击格子");
+        world.battleAttack(accounts.require(req,true,false).id(),body.battleId(),body.targetId(),body.q(),body.r());return Map.of("message","已标记攻击格");
     }
     @PostMapping("/battle/withdraw") public Map<String,String> battleWithdraw(@RequestBody BattleWithdraw body,HttpServletRequest req){
         if(body.battleId()==null||body.direction()==null)throw AccountService.bad("请选择撤离方向");
@@ -71,6 +71,13 @@ public class GameController {
         if(body.battleId()==null)throw AccountService.bad("战斗已变化，请刷新战场");
         world.battleEndTurn(accounts.require(req,true,false).id(),body.battleId());return Map.of("message","回合结束");
     }
+    record FerryRequest(String version,String item,Integer quantity) {}
+    @PostMapping("/ferry/contribute") public Map<String,String> contribute(@RequestBody FerryRequest body,HttpServletRequest req){
+        if(body.quantity()==null)throw AccountService.bad("请输入投入数量");
+        return world.contribute(accounts.require(req,true,false).id(),body.version(),body.item(),body.quantity());
+    }
+    @PostMapping("/ferry/board") public Map<String,String> board(@RequestBody FerryRequest body,HttpServletRequest req){world.ferryBoard(accounts.require(req,true,false).id(),body.version());return Map.of("message","已登船，靠岸后可手动下船");}
+    @PostMapping("/ferry/disembark") public Map<String,String> disembark(@RequestBody FerryRequest body,HttpServletRequest req){world.ferryDisembark(accounts.require(req,true,false).id(),body.version());return Map.of("message","已下船");}
     @GetMapping("/admin/accounts") public List<AccountService.Account> list(HttpServletRequest req){accounts.require(req,true,true);return accounts.list();}
     @PostMapping("/admin/accounts/{id}/approval") public Map<String,String> approval(@PathVariable UUID id,@RequestBody Approval body,HttpServletRequest req){
         world.approve(accounts.require(req,true,true).id(),id,body.approved);return Map.of("message",body.approved?"已批准进入":"已撤销权限");

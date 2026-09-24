@@ -151,31 +151,51 @@ public class BattleService {
         if(p==null||p.entryRound()>b.round())throw bad("请等待下一轮加入先攻");
         return b;
     }
+    private List<Intent> intents(UUID battle){
+        return db.query("select attacker_id,target_id,q,r,visibility from battle_intents where encounter_id=?",
+            (rs,n)->new Intent(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),rs.getInt(3),rs.getInt(4),rs.getString(5)),battle);
+    }
+    private void resolve(UUID battle,Intent intent,long now){
+        Position occupant=positions(battle).stream().filter(p->p.q()==intent.q()&&p.r()==intent.r()&&!p.id().equals(intent.attackerId())).findFirst().orElse(null);
+        if(occupant!=null)hit(battle,intent.attackerId(),occupant.id(),intent.q(),intent.r(),now);
+        else event(battle,"miss",intent.attackerId(),null,intent.q(),intent.r(),now);
+        db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,intent.attackerId());
+    }
     public void step(UUID actor,int q,int r,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);Position from=position(b.id(),actor);
-        if(b.points()<1)throw bad("本回合战术点不足");
-        if(!within(q,r)||distance(from.q(),from.r(),q,r)!=1)throw bad("请选择相邻的战场格子");
-        if(positions(b.id()).stream().anyMatch(p->p.q()==q&&p.r()==r))throw bad("该格已有角色");
-        // A marked target leaving its red cell takes the already declared attack now.
-        List<Intent> triggered=db.query("select attacker_id,target_id,q,r,visibility from battle_intents where encounter_id=? and target_id=? and q=? and r=?",
-            (rs,n)->new Intent(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),rs.getInt(3),rs.getInt(4),rs.getString(5)),b.id(),actor,from.q(),from.r());
-        for(Intent i:triggered){hit(b.id(),i.attackerId(),actor,from.q(),from.r(),now);
-            db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),i.attackerId());}
-        db.update("update battle_actors set q=?,r=? where encounter_id=? and account_id=?",q,r,b.id(),actor);
-        db.update("update battle_encounters set turn_points=turn_points-1 where id=?",b.id());
-        event(b.id(),"move",actor,null,q,r,now);
-        if(b.points()==1)advanceTurn(b,from.initiative(),online,now);
+        Set<WorldMap.Hex> occupied=new HashSet<>();
+        positions(b.id()).stream().filter(p->!p.id().equals(actor)).forEach(p->occupied.add(new WorldMap.Hex(p.q(),p.r())));
+        var route=BattleMovement.path(RADIUS,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r),occupied);
+        if(route.isEmpty())throw bad("这里无法到达，请选择可移动范围内的空格");
+        if(route.size()>b.points())throw bad("行动点不足，请选择白色可移动范围内的格子");
+        int currentQ=from.q(),currentR=from.r();
+        for(var next:route){
+            // Entering a marked cell is harmless; leaving it resolves that stored attack once.
+            for(Intent intent:intents(b.id())){
+                boolean leavingMarkedCell=!intent.attackerId().equals(actor)&&intent.q()==currentQ&&intent.r()==currentR;
+                boolean attackerLeavesRange=intent.attackerId().equals(actor)&&distance(next.q(),next.r(),intent.q(),intent.r())>1;
+                if(leavingMarkedCell||attackerLeavesRange)resolve(b.id(),intent,now);
+            }
+            db.update("update battle_actors set q=?,r=? where encounter_id=? and account_id=?",next.q(),next.r(),b.id(),actor);
+            event(b.id(),"move",actor,null,next.q(),next.r(),now);
+            currentQ=next.q();currentR=next.r();
+        }
+        db.update("update battle_encounters set turn_points=turn_points-? where id=?",route.size(),b.id());
+        if(b.points()==route.size())advanceTurn(b,from.initiative(),online,now);
     }
     public void attack(UUID actor,UUID target,Set<UUID> online,long now){
-        Encounter b=requireTurn(actor);Position from=position(b.id(),actor),to=position(b.id(),target);
-        if(to==null||actor.equals(target))throw bad("请选择另一名参战角色");
-        if(distance(from.q(),from.r(),to.q(),to.r())!=1)throw bad("普通攻击只能选择相邻格的角色");
+        Encounter b=requireTurn(actor);Position to=position(b.id(),target);
+        if(to==null)throw bad("请选择相邻战场格子");
+        attackCell(actor,to.q(),to.r(),online,now);
+    }
+    public void attackCell(UUID actor,int q,int r,Set<UUID> online,long now){
+        Encounter b=requireTurn(actor);Position from=position(b.id(),actor);
+        if(!within(q,r)||distance(from.q(),from.r(),q,r)!=1)throw bad("普通攻击只能预设相邻格");
         if(b.attackUsed())throw bad("本回合已经选择过普通攻击");
         if(b.points()<ATTACK_COST)throw bad("本回合战术点不足");
-        db.update("insert into battle_intents(encounter_id,attacker_id,target_id,q,r,visibility) values(?,?,?,?,?,'public')",
-            b.id(),actor,target,to.q(),to.r());
+        db.update("insert into battle_intents(encounter_id,attacker_id,target_id,q,r,visibility) values(?,?,null,?,?,'public')",b.id(),actor,q,r);
         db.update("update battle_encounters set turn_points=turn_points-?,attack_used=true where id=?",ATTACK_COST,b.id());
-        event(b.id(),"mark",actor,target,to.q(),to.r(),now);
+        event(b.id(),"mark",actor,null,q,r,now);
         if(b.points()==ATTACK_COST)advanceTurn(b,from.initiative(),online,now);
     }
     public void endTurn(UUID actor,Set<UUID> online,long now){
@@ -200,14 +220,12 @@ public class BattleService {
             event(b.id(),"withdraw-blocked",next.id(),null,null,null,now);
         }
 
-        List<Intent> pending=db.query("select attacker_id,target_id,q,r,visibility from battle_intents where encounter_id=? and attacker_id=?",
-            (rs,n)->new Intent(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),rs.getInt(3),rs.getInt(4),rs.getString(5)),b.id(),next.id());
-        for(Intent intent:pending){
-            Position target=position(b.id(),intent.targetId());
-            if(online.contains(next.id())&&target!=null&&target.q()==intent.q()&&target.r()==intent.r())
-                hit(b.id(),next.id(),intent.targetId(),intent.q(),intent.r(),now);
-            else if(!online.contains(next.id()))event(b.id(),"cancel",next.id(),intent.targetId(),intent.q(),intent.r(),now);
-            db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),next.id());
+        for(Intent intent:intents(b.id()))if(intent.attackerId().equals(next.id())){
+            if(online.contains(next.id()))resolve(b.id(),intent,now);
+            else{
+                event(b.id(),"cancel",next.id(),null,intent.q(),intent.r(),now);
+                db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),next.id());
+            }
         }
     }
     private void hit(UUID battle,UUID attacker,UUID target,int q,int r,long now){
@@ -235,7 +253,7 @@ public class BattleService {
         if(destination!=null&&entryCell(destination,incoming)==null)return false;
         Position p=position(b.id(),actor);
         // Leaving the encounter cancels telegraphs; it is not a tactical step out of a marked cell.
-        db.update("delete from battle_intents where encounter_id=? and (attacker_id=? or target_id=?)",b.id(),actor,actor);
+        db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
         db.update("delete from battle_actors where encounter_id=? and account_id=?",b.id(),actor);
         db.update("update accounts set q=?,r=? where id=?",edge.q(),edge.r(),actor);
         event(b.id(),"exit",actor,null,p.q(),p.r(),now);
@@ -276,7 +294,7 @@ public class BattleService {
         Encounter b=forActor(actor);
         if(b==null)return false;
         Position p=position(b.id(),actor);
-        db.update("delete from battle_intents where encounter_id=? and (attacker_id=? or target_id=?)",b.id(),actor,actor);
+        db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
         db.update("delete from battle_actors where encounter_id=? and account_id=?",b.id(),actor);
         event(b.id(),"removed",actor,null,null,null,now);
         if(positions(b.id()).size()<=1)close(b.id(),now);

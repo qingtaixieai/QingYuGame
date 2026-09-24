@@ -100,4 +100,49 @@ public record WorldMap(String version, long seed, String name, int radius, Hex s
         }
         return new WorldMap(UUID.randomUUID().toString(),seed,"青屿大陆",radius,spawn,List.copyOf(tiles.values()));
     }
+
+    public static int distance(Hex a,Hex b){return Math.max(Math.max(Math.abs(a.q-b.q),Math.abs(a.r-b.r)),Math.abs(a.q+a.r-b.q-b.r));}
+    public Tile place(String type){return tiles.stream().filter(t->t.place!=null&&t.place.type.equals(type)).findFirst().orElseThrow();}
+    /** Existing mainland tiles survive verbatim, except for adding the coastal port landmark. */
+    public static WorldMap expand(WorldMap base){
+        if(base.tiles.stream().anyMatch(t->t.place!=null&&t.place.type.equals("port")))return base;
+        int radius=34;
+        var random=new SplittableRandom(base.seed^0x65a7c941L);
+        Hex center=new Hex(28,-14);
+        for(int n=random.nextInt(6);n>0;n--)center=new Hex(-center.r,center.q+center.r);
+        final Hex islandCenter=center;
+        Map<Hex,Tile> map=new LinkedHashMap<>(base.index());
+        for(int r=-radius;r<=radius;r++)for(int q=-radius;q<=radius;q++)if(Math.abs(q+r)<=radius){
+            Hex h=new Hex(q,r);map.putIfAbsent(h,new Tile(q,r,"ocean",false,null));
+            if(distance(h,islandCenter)<=4){
+                int d=distance(h,islandCenter);
+                String terrain=d==4?"beach":random.nextInt(5)<2?"forest":random.nextInt(5)==0?"hill":"plain";
+                map.put(h,new Tile(q,r,terrain,false,null));
+            }
+        }
+        var oldIndex=base.index();
+        Tile port=base.tiles.stream().filter(t->t.walkable()&&t.place==null&&t.hex().neighbors().stream().anyMatch(n->oldIndex.containsKey(n)&&oldIndex.get(n).terrain.equals("ocean")))
+            .sorted(Comparator.comparingInt((Tile t)->distance(t.hex(),islandCenter)).thenComparingInt(Tile::q).thenComparingInt(Tile::r))
+            .filter(t->!base.path(base.spawn,t.hex()).isEmpty()).findFirst().orElseThrow();
+        map.put(port.hex(),new Tile(port.q,port.r,port.terrain,port.road,new Place("望潮港","port","旅人们共同投入木头和石头，在这里建造往返远岛的公共小船。")));
+        Tile landing=map.values().stream().filter(t->t.terrain.equals("beach")&&distance(t.hex(),islandCenter)==4)
+            .min(Comparator.comparingInt((Tile t)->distance(t.hex(),port.hex())).thenComparingInt(Tile::q).thenComparingInt(Tile::r)).orElseThrow();
+        map.put(landing.hex(),new Tile(landing.q,landing.r,"beach",false,new Place("远屿浅滩","landing","小船在这片浅滩停靠，穿过沙岸便能进入岛上的林地和原野。")));
+        return new WorldMap(UUID.randomUUID().toString(),base.seed,base.name,radius,base.spawn,List.copyOf(map.values()));
+    }
+    /** The ferry remains on ocean cells, including both dock positions. */
+    public List<Hex> seaRoute(){
+        var map=index();Hex port=place("port").hex(),landing=place("landing").hex();
+        Set<Hex> ends=new HashSet<>();for(Hex h:landing.neighbors())if(map.containsKey(h)&&map.get(h).terrain.equals("ocean"))ends.add(h);
+        Map<Hex,Hex> previous=new HashMap<>();ArrayDeque<Hex> queue=new ArrayDeque<>();
+        for(Hex h:port.neighbors())if(map.containsKey(h)&&map.get(h).terrain.equals("ocean")){queue.add(h);previous.put(h,h);}
+        while(!queue.isEmpty()){
+            Hex h=queue.remove();if(ends.contains(h)){
+                LinkedList<Hex> route=new LinkedList<>();route.add(h);
+                while(!previous.get(h).equals(h)){h=previous.get(h);route.addFirst(h);}return List.copyOf(route);
+            }
+            for(Hex n:h.neighbors())if(map.containsKey(n)&&map.get(n).terrain.equals("ocean")&&!previous.containsKey(n)){previous.put(n,h);queue.add(n);}
+        }
+        throw new IllegalStateException("No ocean route between ferry docks");
+    }
 }

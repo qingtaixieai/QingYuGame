@@ -26,6 +26,11 @@ public class ResourceService {
         Collections.shuffle(plains);
         for(var t:plains.subList(0,Math.min(30,plains.size())))insert("stone",t);
     }
+    public void extend(WorldMap previous,WorldMap expanded){
+        var old=previous.index();var occupied=new HashSet<WorldMap.Hex>();nodes().forEach(n->occupied.add(new WorldMap.Hex(n.q,n.r)));
+        for(var t:expanded.tiles())if(!old.containsKey(t.hex())&&t.place()==null&&t.terrain().equals("forest")&&!occupied.contains(t.hex()))insert("wood",t);
+        expanded.tiles().stream().filter(t->!old.containsKey(t.hex())&&t.place()==null&&t.terrain().equals("plain")&&!occupied.contains(t.hex())).limit(5).forEach(t->insert("stone",t));
+    }
     private void insert(String kind,WorldMap.Tile t){db.update("insert into resource_nodes(id,kind,q,r) values(?,?,?,?)",UUID.randomUUID(),kind,t.q(),t.r());}
     public void reset(WorldMap world){db.update("delete from world_actions");db.update("delete from resource_nodes");initialize(world);}
     public void cancel(UUID id){db.update("delete from world_actions where account_id=?",id);}

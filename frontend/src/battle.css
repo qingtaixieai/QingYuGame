@@ -85,3 +85,26 @@
 }
 
 .battle-feedback {font-size:11px;color:#9d5e47;line-height:1.5}.battle-feedback:empty {display:none}
+
+/* The operation dock stays independent of selection and withdrawal details. */
+.battle-board{top:110px;height:calc(100% - 225px)}
+.initiative-strip{padding:18px 20px 18px;gap:13px;align-items:center}
+.initiative-portrait{filter:grayscale(1) brightness(.78);transform:scale(.93);transition:transform .3s ease,filter .3s ease,box-shadow .3s ease;transform-origin:center}
+.initiative-portrait.acted{opacity:1}
+.initiative-portrait.current{filter:none;transform:scale(1.1);z-index:1;box-shadow:0 0 0 2px #e6c97788,0 5px 14px #152b3055}
+.battle-cell.reachable .cell-ground{stroke:#798e653b;stroke-width:1}
+.battle-cell.selected .cell-ground{fill:#d3ddab;stroke:#798e653b;stroke-width:1}
+.selected-ring{fill:#fff4bb24;stroke:#fff8d1;stroke-width:3;filter:drop-shadow(0 0 3px #426967);stroke-linejoin:round}
+.attack-range{fill:#d9715422;stroke:#b96548;stroke-width:2;stroke-dasharray:5 3}
+.battle-cell.attackable:hover .cell-ground{fill:#ddbb94}
+.battle-action-dock{position:absolute;bottom:38px;left:calc(50% + var(--rail-width)/2);transform:translateX(-50%);display:flex;align-items:stretch;gap:7px;padding:10px;border:1px solid #bda878;border-radius:11px;background:linear-gradient(#394c40f5,#21372ef7);box-shadow:0 8px 28px #182e3560;z-index:4;color:#f6efd4}
+.battle-action-dock button{display:flex;align-items:center;gap:10px;padding:10px 16px;min-width:110px;background:linear-gradient(#60715b,#465d4d);border:1px solid #7c8b68;border-radius:7px;color:#f6efd4;cursor:pointer;text-align:left}
+.battle-action-dock button span{font-size:13px;font-weight:600;white-space:nowrap}.battle-action-dock button small{display:block;font-size:10px;font-weight:400;margin-top:4px;opacity:.72}
+.battle-action-dock button.chosen{background:linear-gradient(#a69866,#6e754d);border-color:#ffe4a7;box-shadow:0 0 0 2px #e4ce8433}
+.battle-action-dock button.attack-mode.chosen{background:linear-gradient(#9d6950,#74553f)}
+.battle-action-dock .end-turn{margin-left:8px;background:linear-gradient(#7e704f,#5b553e);border-color:#b8a06a}
+.action-points{display:flex;flex-direction:column;justify-content:center;align-items:center;width:49px}.action-points strong{font:28px Georgia,serif;color:#ffe2a0}.action-points small{font-size:9px;color:#ced2b9}
+.battle-actions{left:auto;right:72px;bottom:139px;transform:none;width:270px;max-height:35vh;overflow:auto;text-align:left;padding:11px 13px;background:#f5f1dfe8}
+.battle-actions .battle-quiet{margin-top:5px}.withdraw-row{flex-wrap:wrap}.withdraw-row>span{flex-basis:100%}
+@media(max-width:620px){.initiative-strip{padding:14px 12px;gap:10px}.battle-board{top:170px;height:calc(100% - 310px)}.battle-action-dock{bottom:36px;gap:4px;padding:6px;max-width:calc(100% - var(--rail-width) - 8px)}.battle-action-dock button{min-width:0;gap:4px;padding:8px 7px}.battle-action-dock button span{font-size:11px}.battle-action-dock button small{font-size:8px}.battle-action-dock button svg{width:18px}.battle-action-dock .end-turn{margin-left:2px}.action-points{width:30px;flex-shrink:0}.action-points strong{font-size:23px}.battle-actions{right:8px;bottom:119px;width:228px;max-width:calc(100% - var(--rail-width) - 16px);max-height:24vh;padding:8px}.battle-selection{font-size:11px}.battle-quiet{font-size:9px}}
+@media(prefers-reduced-motion:reduce){.initiative-portrait,.battle-actor{transition:none!important}.battle-intent-ring,.battle-attack-flash{animation:none}}
