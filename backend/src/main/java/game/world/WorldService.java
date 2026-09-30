@@ -26,8 +26,9 @@ public class WorldService {
     private final Map<UUID,Emote> emotes=new HashMap<>();
     private long tick=0,battleRevision=0;
     private final ResourceService resources;private final ModerationService moderation;
+    private final CharacterService characters;private final EquipmentService equipment;
     private final BattleService battles;private final FerryService ferry;
-    WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry){this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
+    WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment){this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
     @PostConstruct void load(){
         var rows=db.queryForList("select document from worlds where id=1",String.class);
         if(rows.isEmpty()) {world=WorldMap.generate(new SecureRandom().nextLong());db.update("insert into worlds values(1,?)",json.writeValueAsString(world));}
@@ -41,40 +42,47 @@ public class WorldService {
             }
             boolean empty=resources.nodes().isEmpty();resources.initialize(world);
             if(!empty&&!previous.version().equals(world.version()))resources.extend(previous,world);
-            ferry.initialize(world,System.currentTimeMillis());
+            ferry.initialize(world,System.currentTimeMillis());characters.initialize(world,System.currentTimeMillis());
         });
     }
     public synchronized WorldMap map(){return world;}
-    public synchronized Map<String,Object> snapshot(){
+    public synchronized Map<String,Object> snapshot(){return snapshot(null);}
+    public synchronized Map<String,Object> snapshot(UUID viewer){
         Set<UUID> online=new HashSet<>();connections.values().forEach(c->online.add(c.user));
         Set<UUID> battling=battles.actorIds();
-        var players=accounts.list().stream().map(a->Map.of("id",a.id(),"username",a.username(),"q",a.q(),"r",a.r(),
-            "color",a.color(),"online",online.contains(a.id()),"moving",routes.containsKey(a.id()),"inBattle",battling.contains(a.id())))
-            .toList();
+        var profiles=characters.all();var viewing=viewer==null?null:characters.get(viewer);
+        var players=profiles.stream().filter(c->!c.life().equals("dead")&&(viewing!=null&&viewing.life().equals("soul")?c.id().equals(viewer):!c.life().equals("soul"))).map(c->{
+            Map<String,Object> p=new LinkedHashMap<>();p.put("id",c.id());p.put("username",c.name());p.put("q",c.q());p.put("r",c.r());p.put("color",c.npc()?"#a56850":accounts.get(c.id()).color());p.put("online",c.npc()||online.contains(c.id()));p.put("moving",routes.containsKey(c.id()));p.put("inBattle",battling.contains(c.id()));p.put("kind",c.kind());p.put("life",c.life());p.put("hp",c.hp());p.put("maxHp",c.maxHp());return p;
+        }).toList();
         // Pending accounts have never entered the world and must not appear on the map.
         Set<UUID> entered=new HashSet<>(db.query("select id from accounts where entered=true",
             (rs,n)->rs.getObject(1,UUID.class)));
-        var out=new LinkedHashMap<String,Object>(Map.of("type","state","version",world.version(),"players",players.stream().filter(p->entered.contains(p.get("id"))).toList(),"tick",tick,"resources",resources.nodes(),"actions",resources.actions(),"serverTime",System.currentTimeMillis(),"emotes",emotes.values().stream().filter(e->e.expiresAt()>System.currentTimeMillis()).toList(),"battles",battles.summaries(world.version()),"battleRevision",battleRevision));out.put("ferry",ferry.state());return out;
+        var out=new LinkedHashMap<String,Object>(Map.of("type","state","version",world.version(),"players",players.stream().filter(p->(entered.contains(p.get("id"))||p.get("kind").equals("monster"))).toList(),"tick",tick,"resources",resources.nodes(),"actions",resources.actions(),"serverTime",System.currentTimeMillis(),"emotes",emotes.values().stream().filter(e->e.expiresAt()>System.currentTimeMillis()).toList(),"battles",battles.summaries(world.version()),"battleRevision",battleRevision));boolean soul=viewing!=null&&viewing.life().equals("soul");
+        out.put("ferry",soul?null:ferry.state());if(soul){out.put("resources",List.of());out.put("actions",List.of());out.put("emotes",List.of());out.put("battles",List.of());}
+        if(viewing!=null){out.put("character",viewing);out.put("inventory",resources.inventory(viewer));}return out;
     }
-    public synchronized AccountService.Account register(String name,String pass){return accounts.register(name,pass,world.spawn());}
+    public synchronized AccountService.Account register(String name,String pass){var a=accounts.register(name,pass,world.spawn());characters.ensurePlayers();return a;}
     public synchronized List<WorldMap.Hex> move(UUID id,int q,int r,String version){
         if(!world.version().equals(version))throw AccountService.bad("世界已更新，请刷新地图后重试");
         AccountService.Account a=accounts.get(id);
         if(!a.approved())throw AccountService.bad("游戏权限已被撤销");
         ferry.requireAshore(id);
+        if(characters.get(id).life().equals("down"))throw AccountService.bad("倒地后无法移动");
         if(battles.engaged(id))throw AccountService.bad("角色正在战斗中，大世界视角只能查看");
         WorldMap.Hex target=new WorldMap.Hex(q,r),from=new WorldMap.Hex(a.q(),a.r());
         if(from.equals(target)){routes.remove(id);return List.of();}
-        if(battles.blocked(q,r))throw AccountService.bad("此格正在战斗，已封锁通行；请从相邻格选择参战");
+        boolean soul=characters.get(id).life().equals("soul");
+        if(!soul&&battles.blocked(q,r))throw AccountService.bad("此格正在战斗，已封锁通行；请从相邻格选择参战");
         var available=new HashMap<>(world.index());
-        battles.summaries(world.version()).forEach(b->available.remove(new WorldMap.Hex(b.q(),b.r())));
+        if(!soul)battles.summaries(world.version()).forEach(b->available.remove(new WorldMap.Hex(b.q(),b.r())));
         List<WorldMap.Hex> path=WorldMap.path(available,from,target,false);
         if(path.isEmpty())throw AccountService.bad("无法到达这里，请选择陆地或经桥梁绕行");
-        tx.executeWithoutResult(s->resources.cancel(id));
+        tx.executeWithoutResult(s->{resources.cancel(id);characters.cancelTimer(id);});
         routes.put(id,new ArrayDeque<>(path));broadcast();return path;
     }
     public synchronized void stop(UUID id){
         ferry.requireAshore(id);
+        if(characters.get(id).life().equals("down"))throw AccountService.bad("倒地后无法移动");
         if(battles.engaged(id))throw AccountService.bad("角色正在战斗中，大世界视角只能查看");
         routes.remove(id);broadcast();
     }
@@ -93,13 +101,13 @@ public class WorldService {
     public synchronized void disconnect(String socketId){
         Connection c=connections.remove(socketId);
         if(c!=null && connections.values().stream().noneMatch(x->x.user.equals(c.user))){
-            routes.remove(c.user);
+            routes.remove(c.user);characters.cancelTimer(c.user);
             if(battles.engaged(c.user))battleRevision++;
         }
         broadcast();
     }
     public synchronized void closeUser(UUID id){
-        routes.remove(id);emotes.remove(id);
+        routes.remove(id);emotes.remove(id);characters.cancelTimer(id);
         var matches=connections.entrySet().stream().filter(e->e.getValue().user.equals(id)).toList();
         for(var e:matches){connections.remove(e.getKey());try{e.getValue().socket.close(CloseStatus.POLICY_VIOLATION);}catch(Exception ignored){}}
         if(!matches.isEmpty()&&battles.engaged(id))battleRevision++;
@@ -118,21 +126,23 @@ public class WorldService {
     public synchronized WorldMap regenerate(UUID actor){
         WorldMap next=WorldMap.expand(WorldMap.generate(new SecureRandom().nextLong()));
         tx.executeWithoutResult(s->{db.update("update worlds set document=? where id=1",json.writeValueAsString(next));
-            db.update("update accounts set q=?,r=?",next.spawn().q(),next.spawn().r());resources.reset(next);battles.reset();ferry.reset(next,System.currentTimeMillis());audit(actor,"regenerate",next.version());});
+            db.update("update accounts set q=?,r=?",next.spawn().q(),next.spawn().r());resources.reset(next);battles.reset();ferry.reset(next,System.currentTimeMillis());characters.reset(next,System.currentTimeMillis());audit(actor,"regenerate",next.version());});
         world=next;battles.world(world);routes.clear();emotes.clear();battleRevision++;broadcast();return world;
     }
     public synchronized List<Map<String,Object>> inventory(UUID id){accounts.get(id);return resources.inventory(id);}
     public synchronized Map<String,String> collect(UUID id,int q,int r,String version){
+        characters.requireAlive(id);
         if(!world.version().equals(version))throw AccountService.bad("世界已更新，请刷新地图后重试");
         var a=accounts.get(id);
         if(!a.approved())throw AccountService.bad("游戏权限已被撤销");
         ferry.requireAshore(id);
         if(battles.engaged(id))throw AccountService.bad("角色正在战斗中，不能在大世界采集");
         if(a.q()!=q||a.r()!=r||routes.containsKey(id))throw AccountService.bad("请先到达资源所在格子并停下");
-        String message=tx.execute(s->resources.collect(id,q,r,System.currentTimeMillis()));
+        String message=tx.execute(s->{characters.hostile(id);return resources.collect(id,q,r,System.currentTimeMillis());});
         broadcast();return Map.of("message",message);
     }
     private AccountService.Account requireFerryAction(UUID id,String version){
+        characters.requireAlive(id);
         if(!world.version().equals(version))throw AccountService.bad("世界已更新，请刷新地图");
         var a=accounts.get(id);
         if(!a.approved())throw AccountService.bad("游戏权限已被撤销");
@@ -195,6 +205,7 @@ public class WorldService {
         battleRevision++;broadcast();
     }
     public synchronized Emote emote(UUID id,String code,String version){
+        characters.requireAlive(id);
         if(!world.version().equals(version))throw AccountService.bad("世界已更新，请刷新后再发送表情");
         if(!accounts.get(id).approved())throw AccountService.bad("游戏权限已被撤销");
         ferry.requireAshore(id);
@@ -231,26 +242,70 @@ public class WorldService {
         tick++;
         boolean emotesChanged=emotes.values().removeIf(e->e.expiresAt()<=System.currentTimeMillis());
         long now=System.currentTimeMillis();
+        var soulsBefore=characters.all().stream().filter(c->c.life().equals("soul")).map(CharacterService.Character::id).toList();
+        boolean lifeChanged=Boolean.TRUE.equals(tx.execute(s->{boolean changed=characters.advance(now,onlineUsers());for(UUID id:soulsBefore)if(characters.get(id).alive())battles.rejoinAtCell(id,now);return changed;}));
+        if(lifeChanged)battleRevision++;
+        boolean monstersChanged=Boolean.TRUE.equals(tx.execute(s->characters.wander(now,battles.actorIds())));
+        boolean encounterChanged=Boolean.TRUE.equals(tx.execute(s->monsterEncounters(now)));
+        if(encounterChanged)battleRevision++;
         boolean ferryChanged=Boolean.TRUE.equals(tx.execute(s->ferry.advance(now)));
         boolean resourcesChanged=Boolean.TRUE.equals(tx.execute(s->resources.advance(world,now)));
         boolean battlesChanged=Boolean.TRUE.equals(tx.execute(s->battles.advance(onlineUsers(),now)));
-        if(battlesChanged)battleRevision++;
+        if(battlesChanged){battleRevision++;for(var c:characters.all())if(!c.alive()){routes.remove(c.id());resources.cancel(c.id());}}
         if(tick%60==0){
             closeInvalidSessions();
         }
-        if(routes.isEmpty()){if(resourcesChanged||emotesChanged||battlesChanged||ferryChanged||tick%30==0)broadcast();return;}
-        routes.entrySet().removeIf(e->battles.engaged(e.getKey())||!e.getValue().isEmpty()&&battles.blocked(e.getValue().peek().q(),e.getValue().peek().r()));
+        if(routes.isEmpty()){if(lifeChanged||monstersChanged||encounterChanged||resourcesChanged||emotesChanged||battlesChanged||ferryChanged||tick%30==0)broadcast();return;}
+        routes.entrySet().removeIf(e->battles.engaged(e.getKey())||characters.get(e.getKey()).life().equals("down")||!characters.get(e.getKey()).life().equals("soul")&&!e.getValue().isEmpty()&&battles.blocked(e.getValue().peek().q(),e.getValue().peek().r()));
         Map<UUID,WorldMap.Hex> steps=new HashMap<>();
         routes.forEach((id,path)->{if(!path.isEmpty())steps.put(id,path.peek());});
         // Commit positions before announcing them; a restart cannot roll back an acknowledged step.
         tx.executeWithoutResult(s->steps.forEach((id,h)->db.update("update accounts set q=?,r=? where id=?",h.q(),h.r(),id)));
-        steps.keySet().forEach(id->routes.get(id).remove());routes.entrySet().removeIf(e->e.getValue().isEmpty());broadcast();
+        steps.keySet().forEach(id->routes.get(id).remove());
+        tx.executeWithoutResult(s->{for(var e:routes.entrySet())if(characters.get(e.getKey()).life().equals("soul")&&!e.getValue().isEmpty()){var h=e.getValue().remove();characters.relocate(e.getKey(),h.q(),h.r());}});
+        routes.entrySet().removeIf(e->e.getValue().isEmpty());
+        if(Boolean.TRUE.equals(tx.execute(s->monsterEncounters(now))))battleRevision++;
+        broadcast();
+    }
+    private boolean monsterEncounters(long now){
+        boolean changed=false;
+        Set<UUID> entered=new HashSet<>(db.query("select id from accounts where entered=true and approved=true",(r,n)->r.getObject(1,UUID.class)));
+        for(var monster:characters.all())if(monster.npc()&&monster.alive()&&!battles.engaged(monster.id())&&!battles.blocked(monster.q(),monster.r())){
+            var target=characters.all().stream().filter(c->!c.npc()&&entered.contains(c.id())&&(c.alive()||c.life().equals("down"))&&c.protectedUntil()<=now&&c.hex().equals(monster.hex())&&!battles.engaged(c.id())&&!ferry.aboard(c.id())).findFirst();
+            if(target.isPresent()){battles.start(monster.id(),target.get().id(),world.version(),world,now);changed=true;}
+        }
+        if(changed)battles.actorIds().forEach(id->{routes.remove(id);resources.cancel(id);characters.cancelTimer(id);});return changed;
+    }
+    public synchronized CharacterService.Character character(UUID id){return characters.get(id);}
+    public synchronized List<Map<String,Object>> catalog(){return equipment.catalog();}
+    public synchronized void equip(UUID id,String code){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中不能更换武器");tx.executeWithoutResult(s->equipment.equip(id,code));broadcast();}
+    public synchronized void grant(UUID admin,UUID target,String code,int quantity){accounts.get(target);tx.executeWithoutResult(s->{equipment.give(target,code,quantity);audit(admin,"grant-item",target+":"+code+":"+quantity);});broadcast();}
+    public synchronized void lifeAction(UUID id,String action,UUID target){
+        if(action==null)throw AccountService.bad("请选择行动");
+        long now=System.currentTimeMillis();
+        tx.executeWithoutResult(s->{
+            if(action.equals("surrender")){battles.surrender(id,onlineUsers(),now);routes.remove(id);}
+            else if(action.equals("rescue")&&battles.engaged(id))battles.rescue(id,target,onlineUsers(),now);
+            else {
+                if(battles.engaged(id))throw AccountService.bad("请先离开战斗");
+                ferry.requireAshore(id);
+                if(routes.containsKey(id))throw AccountService.bad("请先停下");
+                switch(action){
+                    case "bind" -> characters.bind(id);
+                    case "rest","recall" -> {resources.cancel(id);characters.begin(id,action,now);}
+                    case "revive" -> {characters.returnToMark(id,now);battles.rejoinAtCell(id,now);}
+                    case "cancel" -> characters.cancelTimer(id);
+                    case "rescue" -> {characters.requireAlive(id);var a=characters.get(id);var t=characters.get(target);if(t.npc()||!a.hex().equals(t.hex())||battles.engaged(target))throw AccountService.bad("请与倒地旅人处于同一世界格");characters.rescue(target);}
+                    default -> throw AccountService.bad("行动不存在");
+                }
+            }
+        });battleRevision++;broadcast();
     }
     private void broadcast(){
         if(connections.isEmpty())return;
-        TextMessage payload=new TextMessage(json.writeValueAsString(snapshot()));
+
         List<String> dead=new ArrayList<>();
-        connections.forEach((key,c)->{try{if(c.socket.isOpen())c.socket.sendMessage(payload);else dead.add(key);}catch(Exception e){dead.add(key);}});
+        connections.forEach((key,c)->{try{if(c.socket.isOpen())c.socket.sendMessage(new TextMessage(json.writeValueAsString(snapshot(c.user))));else dead.add(key);}catch(Exception e){dead.add(key);}});
         for(String id:dead){Connection c=connections.remove(id);if(c!=null){try{c.socket.close();}catch(Exception ignored){}
             if(connections.values().stream().noneMatch(x->x.user.equals(c.user))){routes.remove(c.user);if(battles.engaged(c.user))battleRevision++;}}}
     }

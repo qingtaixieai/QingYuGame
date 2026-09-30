@@ -38,7 +38,7 @@ function ruin(g:Graphics,x:number,y:number){
   pixel(g,x-12,y+8,10,3,0x7d9b61);pixel(g,x+3,y+5,6,4,0x7d9b61);
 }
 export type MapControls={zoom:(factor:number)=>void;fit:()=>void;locate:(h:Hex)=>void};
-type Props={active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
+type Props={deathMark:Hex|null;active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
 export const MapView=memo(function MapView(props:Props){
   const host=useRef<HTMLDivElement>(null), latest=useRef(props), application=useRef<Application|null>(null);
   latest.current=props;
@@ -54,7 +54,8 @@ export const MapView=memo(function MapView(props:Props){
       const scene=new Container(),ground=new Graphics(),roads=new Graphics(),decor=new Graphics(),markers=new Container(),selection=new Graphics(),routeLine=new Graphics(),actors=new Container();
       app.stage.addChild(scene);const resourceLayer=new Container(),effects=new Container(),battleMarks=new Container();
       scene.addChild(ground,roads,decor,resourceLayer,markers,battleMarks,routeLine,selection,actors,effects);
-      let battleSignature="";
+      let battleSignature="",deathSignature="";
+      const deathMarker=new Container();scene.addChild(deathMarker);
       const map=props.world,index=new Map(map.tiles.map(t=>[key(t),t]));
       for(const t of map.tiles){
         const {x,y}=position(t),n=Math.abs(t.q*137+t.r*73)%7;
@@ -122,6 +123,11 @@ export const MapView=memo(function MapView(props:Props){
       }
       app.ticker.add(ticker=>{
         const current=latest.current,now=Date.now()+current.clockOffset;
+        const markSignature=current.deathMark?key(current.deathMark):'';
+        if(markSignature!==deathSignature){deathSignature=markSignature;deathMarker.removeChildren().forEach(c=>c.destroy());
+          if(current.deathMark){const p=position(current.deathMark),g=new Graphics();hex(g,p.x,p.y,SIZE-2).fill({color:0xe8ddff,alpha:.25}).stroke({color:0xf5e5ff,width:2});g.moveTo(p.x,p.y-14).lineTo(p.x+7,p.y).lineTo(p.x,p.y+9).lineTo(p.x-7,p.y).closePath().fill(0xeaddff);deathMarker.addChild(g);
+            const text=new Text({text:'死亡标记',style:{fontFamily:'Microsoft YaHei',fontSize:10,fill:0xffffff,stroke:{color:0x69587e,width:3}}});text.anchor.set(.5);text.position.set(p.x,p.y+21);deathMarker.addChild(text);}
+        }
         const ferry=current.ferry;
         if(ferry!==previousFerry){
           previousFerry=ferry;boat.visible=!!ferry?.built;
@@ -175,12 +181,14 @@ export const MapView=memo(function MapView(props:Props){
             const count=counts.get(key(p))||0;counts.set(key(p),count+1);const pos=position(p);pos.x+=(count%3-1)*9;pos.y+=Math.floor(count/3)*9;
             let entity=entities.get(p.id);
             if(!entity){const container=new Container(),body=new Graphics(),bar=new Graphics(),bubble=new Graphics(),label=new Text({text:p.username,style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:10,fill:0x254c41,stroke:{color:0xfff9e6,width:3}}}),battleTag=new Text({text:'战斗中',style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:12,fontWeight:'bold',fill:0xa44536,stroke:{color:0xfff6dc,width:4}}});label.anchor.set(.5);label.y=-28;battleTag.anchor.set(.5);battleTag.y=-43;battleTag.visible=p.inBattle;bubble.y=-68;container.addChild(body,label,battleTag,bar,bubble);actors.addChild(container);container.position.set(pos.x,pos.y);entity={container,body,bar,barPixels:-1,bubble,emoteCode:'',label,battleTag,target:pos,color:'',online:!p.online,inBattle:!p.inBattle};entities.set(p.id,entity);}
+            entity.body.alpha=p.life==='soul'?.4:1;entity.body.rotation=p.life==='down'?Math.PI/2:0;entity.label.text=p.username+(p.life==='soul'?' · 灵魂':p.life==='down'?' · 倒地':p.kind==='monster'?' · 敌对':p.online?'':' · 离线');
             entity.target=pos;entity.container.visible=!current.ferry?.passengerIds.includes(p.id);
             if(entity.color!==p.color||entity.online!==p.online||entity.inBattle!==p.inBattle){entity.color=p.color;entity.online=p.online;entity.inBattle=p.inBattle;const g=entity.body;g.clear();g.ellipse(0,8,9,4).fill({color:0x365443,alpha:.25});
               if(p.id===current.me)g.circle(0,2,14).stroke({color:0xfdf7d1,width:2});
               const c=p.online?Number.parseInt(p.color.slice(1),16):0x929d97;
               pixel(g,-6,-5,12,12,c);pixel(g,-5,-14,10,10,0xf1d3a3);pixel(g,-7,-17,14,6,c);pixel(g,-4,7,3,5,0x54594b);pixel(g,2,7,3,5,0x54594b);pixel(g,-2,-10,1,2,0x5a5748);pixel(g,3,-10,1,2,0x5a5748);
-              entity.label.text=p.username+(p.online?'':' · 离线');entity.battleTag.visible=p.inBattle;entity.container.alpha=p.online?1:.65;
+              if(p.kind==='monster'){g.clear();g.ellipse(0,9,13,5).fill({color:0x365443,alpha:.25});pixel(g,-10,-8,20,17,0x874e3d);pixel(g,-7,-19,14,14,0xaf7150);pixel(g,-10,-23,5,9,0xede0bb);pixel(g,5,-23,5,9,0xede0bb);pixel(g,-5,-14,3,3,0xffd071);pixel(g,3,-14,3,3,0xffd071);pixel(g,-14,-5,5,15,0x754b3e);pixel(g,9,-5,5,15,0x754b3e);pixel(g,-7,9,5,5,0x493c34);pixel(g,3,9,5,5,0x493c34);}
+              entity.battleTag.visible=p.inBattle;entity.container.alpha=p.online?1:.65;
             }
           }
         }

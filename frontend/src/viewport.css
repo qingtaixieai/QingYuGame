@@ -1,4 +1,5 @@
 /* The map owns the viewport. Navigation floats above it and never resizes Pixi. */
+.rotate-prompt,.top-toggle{display:none}
 .game-shell {
   --rail-width: 66px;
   --side-width: 350px;

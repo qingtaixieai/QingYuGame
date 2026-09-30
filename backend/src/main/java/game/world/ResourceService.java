@@ -18,7 +18,7 @@ public class ResourceService {
     }
     public List<Node> nodes(){return db.query("select * from resource_nodes order by q,r",(rs,n)->new Node(rs.getObject("id",UUID.class),rs.getString("kind"),rs.getInt("q"),rs.getInt("r"),rs.getLong("ready_at")));}
     public List<Action> actions(){return db.query("select * from world_actions",(rs,n)->new Action(rs.getObject("account_id",UUID.class),rs.getString("kind"),rs.getObject("node_id",UUID.class),rs.getInt("q"),rs.getInt("r"),rs.getLong("started_at"),rs.getLong("ends_at")));}
-    public List<Map<String,Object>> inventory(UUID id){return db.queryForList("select d.code,d.name,coalesce(i.quantity,0) as quantity from item_definitions d left join inventories i on i.item_code=d.code and i.account_id=? order by d.code",id);}
+    public List<Map<String,Object>> inventory(UUID id){return db.queryForList("select d.code,d.name,d.description,d.kind,d.shape,d.min_range,d.max_range,d.attack_cost,d.damage,coalesce(i.quantity,0) as quantity from item_definitions d left join inventories i on i.item_code=d.code and i.account_id=? order by d.code",id);}
     public void initialize(WorldMap world){
         if(!nodes().isEmpty())return;
         for(var t:world.tiles())if(t.place()==null&&t.terrain().equals("forest"))insert("wood",t);

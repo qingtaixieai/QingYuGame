@@ -23,6 +23,14 @@ public class GameController {
     record BattleAttack(UUID battleId,UUID targetId,Integer q,Integer r) {}
     record BattleTurn(UUID battleId) {}
     record BattleWithdraw(UUID battleId,Integer direction,boolean force) {}
+    record EquipmentRequest(String code) {}
+    record GrantRequest(String code,int quantity) {}
+    record LifeRequest(String action,UUID targetId) {}
+    @GetMapping("/character") public Object character(HttpServletRequest req){return world.character(accounts.require(req,true,false).id());}
+    @GetMapping("/items") public Object items(HttpServletRequest req){accounts.require(req,true,false);return world.catalog();}
+    @PostMapping("/equipment") public Object equip(@RequestBody EquipmentRequest body,HttpServletRequest req){world.equip(accounts.require(req,true,false).id(),body.code());return Map.of("message","装备已更新");}
+    @PostMapping("/character/action") public Object life(@RequestBody LifeRequest body,HttpServletRequest req){world.lifeAction(accounts.require(req,true,false).id(),body.action(),body.targetId());return Map.of("message","行动已处理");}
+    @PostMapping("/admin/accounts/{id}/items") public Object grant(@PathVariable UUID id,@RequestBody GrantRequest body,HttpServletRequest req){world.grant(accounts.require(req,true,true).id(),id,body.code(),body.quantity());return Map.of("message","物品已发放");}
     @GetMapping("/health") public Map<String,String> health(){return Map.of("status","ok");}
     @PostMapping("/register") public Map<String,String> register(@RequestBody Credentials c,HttpServletRequest req){moderation.requireGame(null,ModerationService.ip(req.getRemoteAddr()));world.register(c.username,c.password);return Map.of("message","注册成功，请登录查看审批状态");}
     @PostMapping("/login") public AccountService.Account login(@RequestBody Credentials c,HttpServletRequest req,HttpServletResponse res){return world.login(c.username,c.password,req,res);}
@@ -31,7 +39,7 @@ public class GameController {
         var a=accounts.require(req,false,false);accounts.logout(req,res);world.closeUser(a.id());return Map.of("message","已退出");
     }
     @GetMapping("/world") public WorldMap map(HttpServletRequest req){accounts.require(req,true,false);return world.map();}
-    @GetMapping("/players") public Map<String,Object> players(HttpServletRequest req){accounts.require(req,true,false);return world.snapshot();}
+    @GetMapping("/players") public Map<String,Object> players(HttpServletRequest req){return world.snapshot(accounts.require(req,true,false).id());}
     @PostMapping("/move") public Map<String,Object> move(@RequestBody Move m,HttpServletRequest req){
         var a=accounts.require(req,true,false);
         if(m.q==null||m.r==null||Math.abs((long)m.q)>1000||Math.abs((long)m.r)>1000)throw AccountService.bad("坐标无效");

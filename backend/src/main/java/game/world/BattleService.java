@@ -9,7 +9,7 @@ import java.util.*;
 @Service
 public class BattleService {
     public static final int RADIUS=6;
-    private static final int TURN_POINTS=6,ATTACK_COST=2;
+    private static final int TURN_POINTS=6;
     public static final List<WorldMap.Hex> DIRECTIONS=List.of(new WorldMap.Hex(1,0),new WorldMap.Hex(0,1),new WorldMap.Hex(-1,1),new WorldMap.Hex(-1,0),new WorldMap.Hex(0,-1),new WorldMap.Hex(1,-1));
     private static final String[] NAMES={"东","东南","西南","西","西北","东北"};
     private WorldMap world;
@@ -31,17 +31,20 @@ public class BattleService {
     public boolean blocked(int q,int r){return at(world.version(),q,r)!=null;}
     private final JdbcTemplate db;
     private final AccountService accounts;
+    private final CharacterService characters;
+    private final tools.jackson.databind.json.JsonMapper json=tools.jackson.databind.json.JsonMapper.builder().build();
+    private final Map<UUID,Long> aiNext=new HashMap<>();
     private final long turnMillis;
 
     public record Summary(UUID id,int q,int r,int participants) {}
-    public record Actor(UUID accountId,String username,String color,int q,int r,int initiative,int entryRound,boolean online,Integer withdrawDirection) {}
-    public record Intent(UUID attackerId,UUID targetId,int q,int r,String visibility) {}
+    public record Actor(UUID accountId,String username,String color,int q,int r,int initiative,int entryRound,boolean online,Integer withdrawDirection,CharacterService.Character character,WeaponRules.Weapon weapon,int initiativeRoll,int initiativeScore) {}
+    public record Intent(UUID attackerId,UUID targetId,int q,int r,String visibility,List<WorldMap.Hex> cells,String weapon,int damage,int minRange,int maxRange) {}
     public record Event(long id,String kind,UUID actorId,UUID targetId,Integer q,Integer r,long happenedAt) {}
     private record Encounter(UUID id,String version,int q,int r,int round,UUID turn,int points,boolean attackUsed,long deadline,int nextInitiative,boolean turnStartEdge) {}
     private record Position(UUID id,int q,int r,int initiative,int entryRound) {}
 
-    BattleService(JdbcTemplate db,AccountService accounts,@Value("${game.battle.turn-ms:45000}") long turnMillis){
-        this.db=db;this.accounts=accounts;this.turnMillis=Math.max(5000,turnMillis);
+    BattleService(JdbcTemplate db,AccountService accounts,CharacterService characters,@Value("${game.battle.turn-ms:45000}") long turnMillis){
+        this.db=db;this.accounts=accounts;this.characters=characters;this.turnMillis=Math.max(5000,turnMillis);
     }
 
     private List<Encounter> encounters(String where,Object... args){
@@ -75,11 +78,9 @@ public class BattleService {
     public Object current(UUID viewer,Set<UUID> online){
         Encounter b=forActor(viewer);
         if(b==null)return Map.of("active",false);
-        List<Actor> actors=db.query("select a.account_id,c.username,c.color,a.q,a.r,a.initiative,a.entry_round,a.withdraw_direction from battle_actors a left join accounts c on c.id=a.account_id where a.encounter_id=? order by a.initiative",
-            (rs,n)->new Actor(rs.getObject(1,UUID.class),Objects.requireNonNullElse(rs.getString(2),"旅人"),Objects.requireNonNullElse(rs.getString(3),"#9aa69b"),rs.getInt(4),rs.getInt(5),rs.getInt(6),rs.getInt(7),online.contains(rs.getObject(1,UUID.class)),(Integer)rs.getObject(8)),b.id());
-        List<Intent> intents=db.query("select attacker_id,target_id,q,r,visibility from battle_intents where encounter_id=?",
-            (rs,n)->new Intent(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),rs.getInt(3),rs.getInt(4),rs.getString(5)),b.id())
-            .stream().filter(i->i.visibility().equals("public")||i.attackerId().equals(viewer)).toList();
+        List<Actor> actors=db.query("select a.account_id,c.username,c.color,a.q,a.r,a.initiative,a.entry_round,a.withdraw_direction,a.initiative_roll,a.initiative_score from battle_actors a left join accounts c on c.id=a.account_id where a.encounter_id=? order by a.initiative",
+            (rs,n)->new Actor(rs.getObject(1,UUID.class),characters.get(rs.getObject(1,UUID.class)).name(),Objects.requireNonNullElse(rs.getString(3),"#9aa69b"),rs.getInt(4),rs.getInt(5),rs.getInt(6),rs.getInt(7),(online.contains(rs.getObject(1,UUID.class))||characters.get(rs.getObject(1,UUID.class)).npc()),(Integer)rs.getObject(8),characters.get(rs.getObject(1,UUID.class)),characters.weapon(rs.getObject(1,UUID.class)),rs.getInt(9),rs.getInt(10)),b.id());
+        List<Intent> intents=intents(b.id()).stream().filter(i->i.visibility().equals("public")||i.attackerId().equals(viewer)).toList();
         List<Event> events=db.query("select id,kind,actor_id,target_id,q,r,happened_at from battle_events where encounter_id=? order by id desc limit 16",
             (rs,n)->new Event(rs.getLong(1),rs.getString(2),rs.getObject(3,UUID.class),rs.getObject(4,UUID.class),(Integer)rs.getObject(5),(Integer)rs.getObject(6),rs.getLong(7)),b.id());
         Collections.reverse(events);
@@ -93,25 +94,29 @@ public class BattleService {
     public UUID start(UUID actor,UUID target,String version,WorldMap world,long now){
         if(!world.version().equals(version))throw bad("世界已更新，请刷新地图");
         if(actor.equals(target))throw bad("不能向自己发起战斗");
-        var a=accounts.get(actor);var t=accounts.get(target);
-        if(!a.approved()||!t.approved())throw bad("目标未获准进入世界");
-        if(a.q()!=t.q()||a.r()!=t.r())throw bad("只能向同一世界格的旅人发起战斗");
-        if(db.queryForObject("select count(*) from accounts where id=? and entered=true",Integer.class,actor)==0)throw bad("请先进入世界");
-        if(db.queryForObject("select count(*) from accounts where id=? and entered=true",Integer.class,target)==0)throw bad("目标尚未进入世界");
+        var a=characters.get(actor);var t=characters.get(target);
+        characters.requireAlive(actor);
+        if((!t.alive()&&!t.life().equals("down"))||t.protectedUntil()>now)throw bad("目标当前不能参战");
+        if(a.q()!=t.q()||a.r()!=t.r())throw bad("只能向同一世界格的角色发起战斗");
+        for(var c:List.of(a,t))if(!c.npc()&&(!accounts.get(c.id()).approved()||db.queryForObject("select count(*) from accounts where id=? and entered=true",Integer.class,c.id())==0))throw bad("角色尚未进入世界");
         if(forActor(actor)!=null||forActor(target)!=null)throw bad("角色已经在战斗中");
         if(at(version,a.q(),a.r())!=null)throw bad("此格已有战斗，请选择加入");
         UUID id=UUID.randomUUID();
-        db.update("insert into battle_encounters(id,world_version,world_q,world_r,turn_account_id,turn_deadline) values(?,?,?,?,?,?)",
-            id,version,a.q(),a.r(),actor,now+turnMillis);
-        List<UUID> participants=new ArrayList<>(db.query("select id from accounts where approved=true and entered=true and q=? and r=? order by id",(rs,n)->rs.getObject(1,UUID.class),a.q(),a.r()));
-        participants.remove(actor);participants.addFirst(actor);
+        db.update("insert into battle_encounters(id,world_version,world_q,world_r,turn_account_id,turn_deadline) values(?,?,?,?,?,?)",id,version,a.q(),a.r(),actor,now+turnMillis);
+        Set<UUID> entered=new HashSet<>(db.query("select id from accounts where approved=true and entered=true",(rs,n)->rs.getObject(1,UUID.class)));
+        List<UUID> participants=new ArrayList<>(characters.all().stream().filter(c->(c.npc()||entered.contains(c.id()))&&(c.alive()||c.life().equals("down"))&&c.q()==a.q()&&c.r()==a.r()&&(c.protectedUntil()<=now||c.id().equals(actor))).map(CharacterService.Character::id).toList());
+        Map<UUID,Integer> rolls=new HashMap<>();participants.forEach(u->rolls.put(u,1+new java.security.SecureRandom().nextInt(20)));
+        Collections.shuffle(participants);
+        participants.sort(Comparator.<UUID>comparingInt(u->rolls.get(u)+Math.floorDiv(characters.get(u).agility()-10,2)).reversed().thenComparing(Comparator.<UUID>comparingInt(u->characters.get(u).agility()).reversed()));
+        characters.hostile(actor);
         List<WorldMap.Hex> cells=new ArrayList<>();
         for(int q=-RADIUS+1;q<RADIUS;q++)for(int r=-RADIUS+1;r<RADIUS;r++)if(distance(0,0,q,r)<RADIUS)cells.add(new WorldMap.Hex(q,r));
         if(participants.size()>cells.size())throw bad("此格人数超过战场容量");
         Collections.shuffle(cells);
         for(int i=0;i<participants.size();i++){UUID user=participants.get(i);if(engaged(user))throw bad("同格角色已在其他战斗中");var cell=cells.get(i);
             db.update("insert into battle_actors(encounter_id,account_id,q,r,initiative,entry_round) values(?,?,?,?,?,1)",id,user,cell.q(),cell.r(),i);}
-        db.update("update battle_encounters set next_initiative=? where id=?",participants.size(),id);
+        for(UUID user:participants){characters.cancelTimer(user);db.update("update battle_actors set initiative_roll=?,initiative_score=? where encounter_id=? and account_id=?",rolls.get(user),rolls.get(user)+Math.floorDiv(characters.get(user).agility()-10,2),id,user);}
+        db.update("update battle_encounters set next_initiative=?,turn_account_id=? where id=?",participants.size(),participants.getFirst(),id);
         event(id,"start",actor,target,null,null,now);
         return id;
     }
@@ -120,6 +125,7 @@ public class BattleService {
         if(!world.version().equals(version))throw bad("世界已更新，请刷新地图");
         Encounter b=byId(id);
         if(b==null)throw bad("战斗已结束");
+        characters.requireAlive(actor);characters.hostile(actor);
         var a=accounts.get(actor);
         if(!a.approved()||distance(a.q(),a.r(),b.q(),b.r())!=1)throw bad("请先到达战斗格旁边，再选择参战");
         if(forActor(actor)!=null)throw bad("你已经在战斗中");
@@ -128,6 +134,11 @@ public class BattleService {
         enter(actor,b,direction,now);
         db.update("update accounts set q=?,r=? where id=?",b.q(),b.r(),actor);
         return id;
+    }
+    public void rejoinAtCell(UUID actor,long now){
+        var c=characters.get(actor);var b=at(world.version(),c.q(),c.r());if(b==null)return;
+        for(var e:edges(b))if(e.walkable()&&entryCell(b,e.direction())!=null){enter(actor,b,e.direction(),now);return;}
+        throw bad("此格战场入口已满，请稍后复活");
     }
     private static int direction(int q,int r){return DIRECTIONS.indexOf(new WorldMap.Hex(q,r));}
     private WorldMap.Hex entryCell(Encounter b,int direction){
@@ -138,7 +149,8 @@ public class BattleService {
     }
     private void enter(UUID actor,Encounter b,int direction,long now){
         var spawn=entryCell(b,direction);if(spawn==null)throw bad("该方向的战场入口已满，请稍后再试");
-        db.update("insert into battle_actors(encounter_id,account_id,q,r,initiative,entry_round) values(?,?,?,?,?,?)",b.id(),actor,spawn.q(),spawn.r(),b.nextInitiative(),b.round()+1);
+        int roll=1+new java.security.SecureRandom().nextInt(20),score=roll+Math.floorDiv(characters.get(actor).agility()-10,2);
+        db.update("insert into battle_actors(encounter_id,account_id,q,r,initiative,entry_round,initiative_roll,initiative_score) values(?,?,?,?,?,?,?,?)",b.id(),actor,spawn.q(),spawn.r(),b.nextInitiative(),b.round()+1,roll,score);
         db.update("update battle_encounters set next_initiative=next_initiative+1 where id=?",b.id());
         event(b.id(),"join",actor,null,spawn.q(),spawn.r(),now);
     }
@@ -152,36 +164,40 @@ public class BattleService {
         return b;
     }
     private List<Intent> intents(UUID battle){
-        return db.query("select attacker_id,target_id,q,r,visibility from battle_intents where encounter_id=?",
-            (rs,n)->new Intent(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),rs.getInt(3),rs.getInt(4),rs.getString(5)),battle);
+        return db.query("select attacker_id,target_id,q,r,visibility,cells,weapon,damage,min_range,max_range from battle_intents where encounter_id=?",
+            (rs,n)->{int q=rs.getInt(3),r=rs.getInt(4);String cells=rs.getString(6);return new Intent(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),q,r,rs.getString(5),cells==null?List.of(new WorldMap.Hex(q,r)):List.of(json.readValue(cells,WorldMap.Hex[].class)),rs.getString(7),rs.getInt(8),rs.getInt(9),rs.getInt(10));},battle);
     }
     private void resolve(UUID battle,Intent intent,long now){
-        Position occupant=positions(battle).stream().filter(p->p.q()==intent.q()&&p.r()==intent.r()&&!p.id().equals(intent.attackerId())).findFirst().orElse(null);
-        if(occupant!=null)hit(battle,intent.attackerId(),occupant.id(),intent.q(),intent.r(),now);
-        else event(battle,"miss",intent.attackerId(),null,intent.q(),intent.r(),now);
-        db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,intent.attackerId());
+        // Remove first: damage can down/kill an actor and cancel its other pending actions.
+        if(db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,intent.attackerId())==0)return;
+        boolean hit=false;
+        for(var p:new ArrayList<>(positions(battle)))if(!p.id().equals(intent.attackerId())&&intent.cells().contains(new WorldMap.Hex(p.q(),p.r()))){hit(battle,intent.attackerId(),p.id(),p.q(),p.r(),intent.damage(),now);hit=true;}
+        if(!hit)event(battle,"miss",intent.attackerId(),null,intent.q(),intent.r(),now);
     }
+    private void requireStanding(UUID actor){characters.requireAlive(actor);}
     public void step(UUID actor,int q,int r,Set<UUID> online,long now){
-        Encounter b=requireTurn(actor);Position from=position(b.id(),actor);
+        Encounter b=requireTurn(actor);requireStanding(actor);Position from=position(b.id(),actor);
         Set<WorldMap.Hex> occupied=new HashSet<>();
         positions(b.id()).stream().filter(p->!p.id().equals(actor)).forEach(p->occupied.add(new WorldMap.Hex(p.q(),p.r())));
         var route=BattleMovement.path(RADIUS,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r),occupied);
         if(route.isEmpty())throw bad("这里无法到达，请选择可移动范围内的空格");
         if(route.size()>b.points())throw bad("行动点不足，请选择白色可移动范围内的格子");
-        int currentQ=from.q(),currentR=from.r();
+        int currentQ=from.q(),currentR=from.r(),spent=0;
         for(var next:route){
             // Entering a marked cell is harmless; leaving it resolves that stored attack once.
             for(Intent intent:intents(b.id())){
-                boolean leavingMarkedCell=!intent.attackerId().equals(actor)&&intent.q()==currentQ&&intent.r()==currentR;
-                boolean attackerLeavesRange=intent.attackerId().equals(actor)&&distance(next.q(),next.r(),intent.q(),intent.r())>1;
+                boolean leavingMarkedCell=!intent.attackerId().equals(actor)&&intent.cells().contains(new WorldMap.Hex(currentQ,currentR));
+                boolean attackerLeavesRange=intent.attackerId().equals(actor)&&intent.cells().stream().noneMatch(h->{int d=WeaponRules.distance(next,h);return d>=intent.minRange()&&d<=intent.maxRange();});
                 if(leavingMarkedCell||attackerLeavesRange)resolve(b.id(),intent,now);
             }
+            if(!characters.get(actor).alive())break;
+            spent++;
             db.update("update battle_actors set q=?,r=? where encounter_id=? and account_id=?",next.q(),next.r(),b.id(),actor);
             event(b.id(),"move",actor,null,next.q(),next.r(),now);
             currentQ=next.q();currentR=next.r();
         }
-        db.update("update battle_encounters set turn_points=turn_points-? where id=?",route.size(),b.id());
-        if(b.points()==route.size())advanceTurn(b,from.initiative(),online,now);
+        db.update("update battle_encounters set turn_points=turn_points-? where id=?",spent,b.id());
+        if(!finishIfNeeded(b.id(),now)&&(b.points()==spent||!characters.get(actor).alive()))advanceTurn(b,from.initiative(),online,now);
     }
     public void attack(UUID actor,UUID target,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);Position to=position(b.id(),target);
@@ -189,19 +205,22 @@ public class BattleService {
         attackCell(actor,to.q(),to.r(),online,now);
     }
     public void attackCell(UUID actor,int q,int r,Set<UUID> online,long now){
-        Encounter b=requireTurn(actor);Position from=position(b.id(),actor);
-        if(!within(q,r)||distance(from.q(),from.r(),q,r)!=1)throw bad("普通攻击只能预设相邻格");
+        Encounter b=requireTurn(actor);requireStanding(actor);Position from=position(b.id(),actor);
+        var weapon=characters.weapon(actor);
+        var cells=WeaponRules.cells(weapon,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r));
+        if(cells.isEmpty()||cells.stream().anyMatch(h->!within(h.q(),h.r())))throw bad("请选择武器可攻击的完整范围");
         Intent previous=intents(b.id()).stream().filter(i->i.attackerId().equals(actor)).findFirst().orElse(null);
         if(previous!=null&&previous.q()==q&&previous.r()==r)return;
-        if(b.points()<ATTACK_COST)throw bad("本回合战术点不足");
+        if(b.points()<weapon.cost())throw bad("本回合战术点不足");
+        characters.hostile(actor);
         if(previous!=null){
             db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
             event(b.id(),"cancel",actor,null,previous.q(),previous.r(),now);
         }
-        db.update("insert into battle_intents(encounter_id,attacker_id,target_id,q,r,visibility) values(?,?,null,?,?,'public')",b.id(),actor,q,r);
-        db.update("update battle_encounters set turn_points=turn_points-?,attack_used=true where id=?",ATTACK_COST,b.id());
+        db.update("insert into battle_intents(encounter_id,attacker_id,target_id,q,r,visibility,cells,weapon,damage,min_range,max_range) values(?,?,null,?,?,'public',?,?,?,?,?)",b.id(),actor,q,r,json.writeValueAsString(cells),weapon.code(),weapon.damage(),weapon.minRange(),weapon.maxRange());
+        db.update("update battle_encounters set turn_points=turn_points-?,attack_used=true where id=?",weapon.cost(),b.id());
         event(b.id(),"mark",actor,null,q,r,now);
-        if(b.points()==ATTACK_COST)advanceTurn(b,from.initiative(),online,now);
+        if(b.points()==weapon.cost())advanceTurn(b,from.initiative(),online,now);
     }
     public void endTurn(UUID actor,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);
@@ -209,14 +228,14 @@ public class BattleService {
     }
     private void advanceTurn(Encounter b,int after,Set<UUID> online,long now){
         List<Position> all=positions(b.id());
-        if(all.size()<=1){close(b.id(),now);return;}
+        if(finishIfNeeded(b.id(),now))return;
         int round=b.round();
         final int currentRound=round;
         Position next=all.stream().filter(p->p.initiative()>after&&p.entryRound()<=currentRound).findFirst().orElse(null);
-        if(next==null){round++;final int newRound=round;next=all.stream().filter(p->p.entryRound()<=newRound).findFirst().orElse(null);}
+        if(next==null){round++;sortInitiative(b.id());all=positions(b.id());final int newRound=round;next=all.stream().filter(p->p.entryRound()<=newRound).findFirst().orElse(null);}
         if(next==null)throw new IllegalStateException("Battle has no eligible actor");
         db.update("update battle_encounters set round_number=?,turn_account_id=?,turn_points=?,attack_used=false,turn_deadline=?,turn_start_edge=? where id=?",
-            round,next.id(),TURN_POINTS,now+turnMillis,exit(next.q(),next.r()),b.id());
+            round,next.id(),characters.get(next.id()).alive()?TURN_POINTS:0,now+turnMillis,exit(next.q(),next.r()),b.id());
         event(b.id(),"turn",next.id(),null,null,null,now);
         Integer withdrawal=db.queryForObject("select withdraw_direction from battle_actors where encounter_id=? and account_id=?",Integer.class,b.id(),next.id());
         if(withdrawal!=null){
@@ -226,20 +245,24 @@ public class BattleService {
         }
 
         for(Intent intent:intents(b.id()))if(intent.attackerId().equals(next.id())){
-            if(online.contains(next.id()))resolve(b.id(),intent,now);
+            if(online.contains(next.id())||characters.get(next.id()).npc())resolve(b.id(),intent,now);
             else{
                 event(b.id(),"cancel",next.id(),null,intent.q(),intent.r(),now);
                 db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),next.id());
             }
         }
     }
-    private void hit(UUID battle,UUID attacker,UUID target,int q,int r,long now){
+    private void hit(UUID battle,UUID attacker,UUID target,int q,int r,int damage,long now){
+        String result=characters.damage(target,damage,now);
+        if(result.equals("protected"))return;
+        if(result.equals("down")||result.equals("death")){db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,target);event(battle,result,attacker,target,q,r,now);}
+        if(result.equals("death"))db.update("delete from battle_actors where encounter_id=? and account_id=?",battle,target);
         event(battle,"attack",attacker,target,q,r,now);
         if(db.update("update battle_actors set withdraw_direction=null where encounter_id=? and account_id=? and withdraw_direction is not null",battle,target)>0)
             event(battle,"withdraw-interrupted",target,attacker,q,r,now);
     }
     public void withdraw(UUID actor,int direction,boolean force,Set<UUID> online,long now){
-        Encounter b=requireTurn(actor);Position p=position(b.id(),actor);
+        Encounter b=requireTurn(actor);requireStanding(actor);Position p=position(b.id(),actor);
         if(direction<0||direction>5||!sides(p.q(),p.r()).contains(direction))throw bad("请站在对应方向的外圈格子");
         if(!edges(b).get(direction).walkable())throw bad("该方向的大世界地形不可通行");
         if(force){
@@ -260,10 +283,10 @@ public class BattleService {
         // Leaving the encounter cancels telegraphs; it is not a tactical step out of a marked cell.
         db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
         db.update("delete from battle_actors where encounter_id=? and account_id=?",b.id(),actor);
-        db.update("update accounts set q=?,r=? where id=?",edge.q(),edge.r(),actor);
+        characters.relocate(actor,edge.q(),edge.r());
         event(b.id(),"exit",actor,null,p.q(),p.r(),now);
         if(destination!=null)enter(actor,destination,incoming,now);
-        if(positions(b.id()).size()<=1)close(b.id(),now);else advanceTurn(b,p.initiative(),online,now);
+        if(!finishIfNeeded(b.id(),now))advanceTurn(b,p.initiative(),online,now);
         return true;
     }
     private void close(UUID id,long now){
@@ -275,19 +298,55 @@ public class BattleService {
     public boolean advance(Set<UUID> online,long now){
         boolean changed=false;
         for(Encounter battle:encounters("")){
-            List<Position> all=positions(battle.id());
-            if(all.size()<=1){close(battle.id(),now);changed=true;continue;}
-            if(all.stream().noneMatch(p->online.contains(p.id())))continue;
-            // Offline and timed-out actors cannot hold a battle indefinitely.
-            for(int n=0;n<=all.size();n++){
-                Encounter current=byId(battle.id());
-                if(current==null||online.contains(current.turn())&&current.deadline()>now)break;
-                Position turn=position(current.id(),current.turn());
-                advanceTurn(current,turn==null?-1:turn.initiative(),online,now);
-                changed=true;
+            if(finishIfNeeded(battle.id(),now)){changed=true;continue;}
+            Encounter current=byId(battle.id());if(current==null)continue;
+            Position turn=position(current.id(),current.turn());
+            if(turn==null){advanceTurn(current,-1,online,now);changed=true;continue;}
+            var c=characters.get(current.turn());
+            if(c.npc()&&c.alive()){
+                if(aiNext.getOrDefault(c.id(),0L)<=now){aiNext.put(c.id(),now+700);actNpc(current,online,now);changed=true;}
+            }else if(!c.alive()||!online.contains(c.id())||current.deadline()<=now){
+                if(positions(current.id()).stream().anyMatch(p->online.contains(p.id())||characters.get(p.id()).npc())){advanceTurn(current,turn.initiative(),online,now);changed=true;}
             }
+        }return changed;
+    }
+    private void sortInitiative(UUID battle){
+        var order=db.query("select a.account_id from battle_actors a join characters c on c.id=a.account_id where encounter_id=? order by a.initiative_score desc,c.agility desc,a.initiative",(r,n)->r.getObject(1,UUID.class),battle);
+        db.update("update battle_actors set initiative=initiative+10000 where encounter_id=?",battle);
+        for(int i=0;i<order.size();i++)db.update("update battle_actors set initiative=? where encounter_id=? and account_id=?",i,battle,order.get(i));
+    }
+    private boolean finishIfNeeded(UUID id,long now){
+        if(byId(id)==null)return true;
+        var all=positions(id);long standing=all.stream().filter(p->characters.get(p.id()).alive()).count();
+        if(all.size()<=1||standing==0){close(id,now);return true;}return false;
+    }
+    public void rescue(UUID actor,UUID target,Set<UUID> online,long now){
+        Encounter b=requireTurn(actor);requireStanding(actor);var a=position(b.id(),actor);var t=position(b.id(),target);
+        if(t==null||characters.get(target).npc()||distance(a.q(),a.r(),t.q(),t.r())!=1||b.points()!=6)throw bad("救起需要相邻并保留完整6点行动点");
+        characters.rescue(target);event(b.id(),"rescue",actor,target,t.q(),t.r(),now);advanceTurn(b,a.initiative(),online,now);
+    }
+    public void surrender(UUID actor,Set<UUID> online,long now){characters.die(actor,now);remove(actor,online,now);}
+    private void actNpc(Encounter b,Set<UUID> online,long now){
+        Position own=position(b.id(),b.turn());if(own==null)return;
+        var from=new WorldMap.Hex(own.q(),own.r());
+        List<Position> targets=positions(b.id()).stream().filter(p->!p.id().equals(own.id())&&!characters.get(p.id()).npc()).toList();
+        if(targets.isEmpty()){close(b.id(),now);return;}
+        var standing=targets.stream().filter(p->characters.get(p.id()).alive()).toList();if(!standing.isEmpty())targets=standing;
+        var options=new ArrayList<MonsterBrain.Option>();
+        Intent pending=intents(b.id()).stream().filter(i->i.attackerId().equals(own.id())).findFirst().orElse(null);
+        for(var t:targets){var h=new WorldMap.Hex(t.q(),t.r());if(distance(own.q(),own.r(),t.q(),t.r())==1&&b.points()>=2&&(pending==null||!pending.cells().contains(h)))options.add(new MonsterBrain.Option("attack",h,8+(characters.get(t.id()).hp()<=3?4:0)));}
+        if(b.points()>0)for(var next:from.neighbors())if(within(next.q(),next.r())&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
+            double score=0;int nearest=targets.stream().mapToInt(p->distance(next.q(),next.r(),p.q(),p.r())).min().orElse(20),before=targets.stream().mapToInt(p->distance(from.q(),from.r(),p.q(),p.r())).min().orElse(20);
+            score+=(before-nearest)*2-0.4;
+            if(pending!=null&&pending.cells().stream().noneMatch(h->WeaponRules.distance(next,h)==1)&&targets.stream().anyMatch(t->pending.cells().contains(new WorldMap.Hex(t.q(),t.r()))))score+=10;
+            for(var i:intents(b.id()))if(!i.attackerId().equals(own.id())&&i.cells().contains(from))score-=i.damage()*2;
+            if(b.points()<=2&&pending==null&&nearest>1)score-=1;
+            options.add(new MonsterBrain.Option("move",next,score));
         }
-        return changed;
+        var choice=MonsterBrain.choose(options);
+        if(choice==null)endTurn(own.id(),online,now);
+        else if(choice.action().equals("attack"))attackCell(own.id(),choice.cell().q(),choice.cell().r(),online,now);
+        else step(own.id(),choice.cell().q(),choice.cell().r(),online,now);
     }
     public boolean resume(UUID actor,long now){
         Encounter b=forActor(actor);
@@ -302,8 +361,8 @@ public class BattleService {
         db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
         db.update("delete from battle_actors where encounter_id=? and account_id=?",b.id(),actor);
         event(b.id(),"removed",actor,null,null,null,now);
-        if(positions(b.id()).size()<=1)close(b.id(),now);
-        else if(b.turn().equals(actor))advanceTurn(b,p.initiative(),online,now);
+        if(finishIfNeeded(b.id(),now))return true;
+        if(b.turn().equals(actor))advanceTurn(b,p.initiative(),online,now);
         return true;
     }
     public void reset(){
