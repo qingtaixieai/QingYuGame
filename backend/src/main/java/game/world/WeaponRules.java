@@ -5,7 +5,16 @@ import static game.world.WorldMap.Hex;
 
 /** Pure attack geometry shared by players and NPCs. One declaration is one attack. */
 public final class WeaponRules {
-    public record Weapon(String code,String name,String shape,int minRange,int maxRange,int cost,int damage) {}
+    public record Weapon(String code,String name,String shape,int minRange,int maxRange,int cost,int damage,String moveRule) {
+        public Weapon(String code,String name,String shape,int minRange,int maxRange,int cost,int damage){this(code,name,shape,minRange,maxRange,cost,damage,"range");}
+    }
+    public static boolean retainsAttack(String policy,int min,int max,List<Hex> marked,Hex origin,Hex next){
+        if(policy.equals("translated_shape")&&origin!=null){
+            int dq=next.q()-origin.q(),dr=next.r()-origin.r();
+            return marked.stream().anyMatch(h->marked.contains(new Hex(h.q()+dq,h.r()+dr)));
+        }
+        return marked.stream().anyMatch(h->{int d=distance(next,h);return d>=min&&d<=max;});
+    }
     public static final Weapon UNARMED=new Weapon("unarmed","空手","single",1,1,2,2);
     public static final Weapon CLAWS=new Weapon("claws","利爪","single",1,1,2,3);
     public static final List<Hex> DIRECTIONS=List.of(new Hex(1,0),new Hex(0,1),new Hex(-1,1),new Hex(-1,0),new Hex(0,-1),new Hex(1,-1));

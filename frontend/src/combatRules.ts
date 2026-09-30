@@ -9,3 +9,8 @@ export function attackCells(w:Weapon,from:Hex,target:Hex):Hex[]{
  if(w.shape==='line')return Array.from({length:w.maxRange-w.minRange+1},(_,i)=>({q:from.q+v.q*(i+w.minRange),r:from.r+v.r*(i+w.minRange)}));
  const next=directions[(index+1)%6];return [{q:from.q+v.q,r:from.r+v.r},{q:from.q+next.q,r:from.r+next.r}];
 }
+
+export function retainsAttack(i:import('./types').BattleIntent,next:Hex){
+ if(i.moveRule==='translated_shape'&&i.originQ!=null&&i.originR!=null){const dq=next.q-i.originQ,dr=next.r-i.originR;return i.cells.some(h=>i.cells.some(c=>c.q===h.q+dq&&c.r===h.r+dr));}
+ return i.cells.some(h=>{const d=hexDistance(h,next);return d>=i.minRange&&d<=i.maxRange;});
+}

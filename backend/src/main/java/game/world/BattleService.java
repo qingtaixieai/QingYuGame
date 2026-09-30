@@ -38,7 +38,7 @@ public class BattleService {
 
     public record Summary(UUID id,int q,int r,int participants) {}
     public record Actor(UUID accountId,String username,String color,int q,int r,int initiative,int entryRound,boolean online,Integer withdrawDirection,CharacterService.Character character,WeaponRules.Weapon weapon,int initiativeRoll,int initiativeScore) {}
-    public record Intent(UUID attackerId,UUID targetId,int q,int r,String visibility,List<WorldMap.Hex> cells,String weapon,int damage,int minRange,int maxRange) {}
+    public record Intent(UUID attackerId,UUID targetId,int q,int r,String visibility,List<WorldMap.Hex> cells,String weapon,int damage,int minRange,int maxRange,String moveRule,Integer originQ,Integer originR) {}
     public record Event(long id,String kind,UUID actorId,UUID targetId,Integer q,Integer r,long happenedAt) {}
     private record Encounter(UUID id,String version,int q,int r,int round,UUID turn,int points,boolean attackUsed,long deadline,int nextInitiative,boolean turnStartEdge) {}
     private record Position(UUID id,int q,int r,int initiative,int entryRound) {}
@@ -164,9 +164,10 @@ public class BattleService {
         return b;
     }
     private List<Intent> intents(UUID battle){
-        return db.query("select attacker_id,target_id,q,r,visibility,cells,weapon,damage,min_range,max_range from battle_intents where encounter_id=?",
-            (rs,n)->{int q=rs.getInt(3),r=rs.getInt(4);String cells=rs.getString(6);return new Intent(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),q,r,rs.getString(5),cells==null?List.of(new WorldMap.Hex(q,r)):List.of(json.readValue(cells,WorldMap.Hex[].class)),rs.getString(7),rs.getInt(8),rs.getInt(9),rs.getInt(10));},battle);
+        return db.query("select attacker_id,target_id,q,r,visibility,cells,weapon,damage,min_range,max_range,move_rule,origin_q,origin_r from battle_intents where encounter_id=?",
+            (rs,n)->{int q=rs.getInt(3),r=rs.getInt(4);String cells=rs.getString(6);return new Intent(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),q,r,rs.getString(5),cells==null?List.of(new WorldMap.Hex(q,r)):List.of(json.readValue(cells,WorldMap.Hex[].class)),rs.getString(7),rs.getInt(8),rs.getInt(9),rs.getInt(10),rs.getString(11),(Integer)rs.getObject(12),(Integer)rs.getObject(13));},battle);
     }
+    private boolean retains(Intent i,WorldMap.Hex next){return WeaponRules.retainsAttack(i.moveRule(),i.minRange(),i.maxRange(),i.cells(),i.originQ()==null?null:new WorldMap.Hex(i.originQ(),i.originR()),next);}
     private void resolve(UUID battle,Intent intent,long now){
         // Remove first: damage can down/kill an actor and cancel its other pending actions.
         if(db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,intent.attackerId())==0)return;
@@ -187,7 +188,7 @@ public class BattleService {
             // Entering a marked cell is harmless; leaving it resolves that stored attack once.
             for(Intent intent:intents(b.id())){
                 boolean leavingMarkedCell=!intent.attackerId().equals(actor)&&intent.cells().contains(new WorldMap.Hex(currentQ,currentR));
-                boolean attackerLeavesRange=intent.attackerId().equals(actor)&&intent.cells().stream().noneMatch(h->{int d=WeaponRules.distance(next,h);return d>=intent.minRange()&&d<=intent.maxRange();});
+                boolean attackerLeavesRange=intent.attackerId().equals(actor)&&!retains(intent,next);
                 if(leavingMarkedCell||attackerLeavesRange)resolve(b.id(),intent,now);
             }
             if(!characters.get(actor).alive())break;
@@ -217,7 +218,7 @@ public class BattleService {
             db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
             event(b.id(),"cancel",actor,null,previous.q(),previous.r(),now);
         }
-        db.update("insert into battle_intents(encounter_id,attacker_id,target_id,q,r,visibility,cells,weapon,damage,min_range,max_range) values(?,?,null,?,?,'public',?,?,?,?,?)",b.id(),actor,q,r,json.writeValueAsString(cells),weapon.code(),weapon.damage(),weapon.minRange(),weapon.maxRange());
+        db.update("insert into battle_intents(encounter_id,attacker_id,target_id,q,r,visibility,cells,weapon,damage,min_range,max_range,move_rule,origin_q,origin_r) values(?,?,null,?,?,'public',?,?,?,?,?,?,?,?)",b.id(),actor,q,r,json.writeValueAsString(cells),weapon.code(),weapon.damage(),weapon.minRange(),weapon.maxRange(),weapon.moveRule(),from.q(),from.r());
         db.update("update battle_encounters set turn_points=turn_points-?,attack_used=true where id=?",weapon.cost(),b.id());
         event(b.id(),"mark",actor,null,q,r,now);
         if(b.points()==weapon.cost())advanceTurn(b,from.initiative(),online,now);
@@ -338,7 +339,7 @@ public class BattleService {
         if(b.points()>0)for(var next:from.neighbors())if(within(next.q(),next.r())&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
             double score=0;int nearest=targets.stream().mapToInt(p->distance(next.q(),next.r(),p.q(),p.r())).min().orElse(20),before=targets.stream().mapToInt(p->distance(from.q(),from.r(),p.q(),p.r())).min().orElse(20);
             score+=(before-nearest)*2-0.4;
-            if(pending!=null&&pending.cells().stream().noneMatch(h->WeaponRules.distance(next,h)==1)&&targets.stream().anyMatch(t->pending.cells().contains(new WorldMap.Hex(t.q(),t.r()))))score+=10;
+            if(pending!=null&&!retains(pending,next)&&targets.stream().anyMatch(t->pending.cells().contains(new WorldMap.Hex(t.q(),t.r()))))score+=10;
             for(var i:intents(b.id()))if(!i.attackerId().equals(own.id())&&i.cells().contains(from))score-=i.damage()*2;
             if(b.points()<=2&&pending==null&&nearest>1)score-=1;
             options.add(new MonsterBrain.Option("move",next,score));

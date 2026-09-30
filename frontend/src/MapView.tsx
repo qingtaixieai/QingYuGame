@@ -1,3 +1,4 @@
+import {bindMapGestures} from './mapGestures';
 import { memo, useEffect, useRef } from 'react';
 import { Application, Container, Graphics, Text } from 'pixi.js';
 // Pixi's official non-eval polyfills keep WebGL rendering compatible with production CSP.
@@ -97,19 +98,16 @@ export const MapView=memo(function MapView(props:Props){
       function zoomAt(factor:number,x=app.screen.width/2,y=app.screen.height/2){const next=Math.max(fitScale*.65,Math.min(Math.max(1.6,fitScale*5),zoom*factor));const ratio=next/zoom;scene.x=x-(x-scene.x)*ratio;scene.y=y-(y-scene.y)*ratio;zoom=next;scene.scale.set(zoom);report();}
       props.controls.current={zoom:factor=>zoomAt(factor),fit,locate:h=>{const p=position(h);if(zoom<.9){zoom=.9;scene.scale.set(zoom);}scene.position.set(app.screen.width/2-p.x*zoom,app.screen.height/2-p.y*zoom);report();}};
       fit();
-      let start:{x:number;y:number;sx:number;sy:number}|null=null;
+      if(window.matchMedia('(max-height:600px) and (orientation:landscape)').matches){const h=props.players.find(p=>p.id===props.me)||map.spawn;props.controls.current?.locate(h);}
       const canvas=app.canvas;
-      function point(e:PointerEvent){const rect=canvas.getBoundingClientRect();return {x:e.clientX-rect.left,y:e.clientY-rect.top};}
-      function down(e:PointerEvent){if(e.button!==0)return;const p=point(e);start={...p,sx:scene.x,sy:scene.y};canvas.setPointerCapture(e.pointerId);canvas.style.cursor='grabbing';}
-      function move(e:PointerEvent){if(start){const p=point(e);scene.position.set(start.sx+p.x-start.x,start.sy+p.y-start.y);}}
-      function up(e:PointerEvent){if(!start)return;const p=point(e),distance=Math.hypot(p.x-start.x,p.y-start.y);start=null;canvas.style.cursor='grab';if(distance>6)return;
-        const local=scene.toLocal(p);const rf=local.y/(1.5*SIZE),qf=local.x/(SQRT3*SIZE)-rf/2;
+      const unbind=bindMapGestures(canvas,{pan:(dx,dy)=>{scene.x+=dx;scene.y+=dy;},zoom:zoomAt,tap:(x,y)=>{
+        const local=scene.toLocal({x,y});const rf=local.y/(1.5*SIZE),qf=local.x/(SQRT3*SIZE)-rf/2;
         let q=Math.round(qf),r=Math.round(rf),s=Math.round(-qf-rf);const dq=Math.abs(q-qf),dr=Math.abs(r-rf),ds=Math.abs(s+qf+rf);
         if(dq>dr&&dq>ds)q=-r-s;else if(dr>ds)r=-q-s;
         const tile=index.get(`${q},${r}`);if(tile)latest.current.onSelect(tile);
-      }
+      }});
       function wheel(e:WheelEvent){e.preventDefault();const rect=canvas.getBoundingClientRect();zoomAt(Math.exp(-e.deltaY*.0012),e.clientX-rect.left,e.clientY-rect.top);}
-      canvas.style.cursor='grab';canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',()=>{start=null;});canvas.addEventListener('wheel',wheel,{passive:false});
+      canvas.style.cursor='grab';canvas.style.touchAction='none';canvas.addEventListener('wheel',wheel,{passive:false});
       const entities=new Map<string,{container:Container;body:Graphics;bar:Graphics;barPixels:number;bubble:Graphics;emoteCode:string;label:Text;battleTag:Text;target:{x:number;y:number};color:string;online:boolean;inBattle:boolean}>();
       let previousPlayers:Player[]|null=null,previousSelected:Tile|null|undefined,previousRoute:Hex[]|null=null;
       const resourceSprites=new Map<string,{g:Graphics;readyAt:number;q:number;r:number;x:number;y:number}>();
@@ -203,7 +201,7 @@ export const MapView=memo(function MapView(props:Props){
       });
       const resize=new ResizeObserver(()=>{if(disposed||!host.current)return;const w=host.current.clientWidth,h=host.current!.clientHeight,dx=w-app.screen.width,dy=h-app.screen.height,wasFit=Math.abs(zoom-fitScale)<.001;app.renderer.resize(w,h);if(wasFit)fit();else{fitScale=Math.min(w/mapWidth,h/mapHeight);scene.x+=dx/2;scene.y+=dy/2;report();}});resize.observe(host.current!);
       if(!latest.current.active)app.ticker.stop();
-      cleanup=()=>{resize.disconnect();canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);props.controls.current=null;application.current=null;app.destroy(true,{children:true});};
+      cleanup=()=>{resize.disconnect();canvas.removeEventListener('wheel',wheel);unbind();props.controls.current=null;application.current=null;app.destroy(true,{children:true});};
     }
     init().catch(e=>{console.error(e);if(host.current)host.current.innerHTML='<div class="map-error">画面初始化失败，请开启浏览器硬件加速后刷新。</div>';});
     return()=>{disposed=true;cleanup();};

@@ -12,8 +12,8 @@ public class EquipmentService {
     public WeaponRules.Weapon weapon(String code){
         if(code==null||code.equals("unarmed"))return WeaponRules.UNARMED;
         if(code.equals("claws"))return WeaponRules.CLAWS;
-        return db.query("select code,name,shape,min_range,max_range,attack_cost,damage from item_definitions where code=? and kind='weapon'",
-            (r,n)->new WeaponRules.Weapon(r.getString(1),r.getString(2),r.getString(3),r.getInt(4),r.getInt(5),r.getInt(6),r.getInt(7)),code).stream().findFirst().orElseThrow(()->AccountService.bad("武器不存在"));
+        return db.query("select code,name,shape,min_range,max_range,attack_cost,damage,move_rule from item_definitions where code=? and kind='weapon'",
+            (r,n)->new WeaponRules.Weapon(r.getString(1),r.getString(2),r.getString(3),r.getInt(4),r.getInt(5),r.getInt(6),r.getInt(7),r.getString(8)),code).stream().findFirst().orElseThrow(()->AccountService.bad("武器不存在"));
     }
     public List<Map<String,Object>> catalog(){return db.queryForList("select * from item_definitions order by code");}
     public void equip(UUID id,String code){
