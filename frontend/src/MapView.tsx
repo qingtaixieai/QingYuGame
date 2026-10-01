@@ -6,7 +6,7 @@ import 'pixi.js/unsafe-eval';
 import type { Hex, Player, Tile, World, ResourceNode, WorldAction, Emote, BattleSummary, FerryState } from './types';
 import {emoteArt,emotePalette} from './emotes';
 import { key } from './types';
-import {ferryRouteProgress} from './ferryMotion';
+import {advanceRenderClock,ferryRouteProgress} from './ferryMotion';
 
 const SIZE=25, SQRT3=Math.sqrt(3);
 export const position=(h:Hex)=>({x:SQRT3*SIZE*(h.q+h.r/2),y:1.5*SIZE*h.r});
@@ -48,7 +48,7 @@ export const MapView=memo(function MapView(props:Props){
     let disposed=false,cleanup=()=>{};
     const app=new Application();
     async function init(){
-      await app.init({resizeTo:host.current!,background:0xa5cdd0,antialias:false,resolution:Math.min(devicePixelRatio,2),autoDensity:true,preference:'webgl'});
+      await app.init({width:host.current!.clientWidth,height:host.current!.clientHeight,background:0xa5cdd0,antialias:false,resolution:Math.min(devicePixelRatio,2),autoDensity:true,preference:'webgl'});
       if(disposed||!host.current){app.destroy(true,{children:true});return;}
       application.current=app;
       host.current!.appendChild(app.canvas);
@@ -119,8 +119,12 @@ export const MapView=memo(function MapView(props:Props){
         let stone:Graphics|undefined;if(n.kind==='stone'){stone=new Graphics();pixel(stone,-6,-3,12,8,0x91a090);pixel(stone,-4,-5,8,5,0xd3d8bc);c.addChild(stone);}
         animations.push({container:c,start:performance.now(),x:p.x,y:p.y,stone});
       }
+      let frameAt=performance.now(),renderTime=Date.now()+latest.current.clockOffset;
       app.ticker.add(ticker=>{
-        const current=latest.current,now=Date.now()+current.clockOffset;
+        const current=latest.current,frameNow=performance.now();
+        renderTime=advanceRenderClock(renderTime,frameNow-frameAt,Date.now()+current.clockOffset);
+        frameAt=frameNow;
+        const now=renderTime;
         const markSignature=current.deathMark?key(current.deathMark):'';
         if(markSignature!==deathSignature){deathSignature=markSignature;deathMarker.removeChildren().forEach(c=>c.destroy());
           if(current.deathMark){const p=position(current.deathMark),g=new Graphics();hex(g,p.x,p.y,SIZE-2).fill({color:0xe8ddff,alpha:.25}).stroke({color:0xf5e5ff,width:2});g.moveTo(p.x,p.y-14).lineTo(p.x+7,p.y).lineTo(p.x,p.y+9).lineTo(p.x-7,p.y).closePath().fill(0xeaddff);deathMarker.addChild(g);

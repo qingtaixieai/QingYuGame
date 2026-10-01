@@ -136,3 +136,13 @@
 - 本地截图：`.local/mobile-battle-refresh.png`、`.local/mobile-equipment-refresh.png`。当地界面测试与公网静态资源核对分别记录。
 - 已部署https://qingtaixieai.com，备份`/opt/qingyu/backups/battle-20260930-233715/`。公网健康、HTML/JS/CSS构建字节核对通过；数据库V8，旧世界文档与发布前备份完全一致，原9账号/人物保留，未对正式玩家做攻击或装备测试。
 - 手机浏览器能否真正隐藏地址栏/系统栏取决于浏览器全屏支持与用户授权；页面已提供入口与失败提示。真实手机双指体验仍待试玩。
+
+## 2026-10-01: Stable mobile header and ferry animation
+
+- Authorized: hide the top bar while preserving its occupied height and every other layout; use the Qingyu tree for sidebar collapse and a distinct magnifier for the existing map tool toggle.
+- Removed zero-height/header display:none and hidden-state rail padding. Hidden header uses visibility:hidden/pointer-events:none. Fixed chat sidebar safe-area selector specificity so it uses the same left inset as the rail.
+- Ferry diagnosis from code: every network snapshot replaced the render clock offset, allowing network jitter to rewind interpolated movement; unchanged resource snapshots caused full resource reconciliation; two independent resize owners (Pixi resizeTo and ResizeObserver) could resize the same canvas. These are identified contributors, not a measured diagnosis of all physical-phone dropped frames.
+- Rendering now advances continuously using performance time and slews clock correction at up to 10% per frame; resumes at server time after suspension. Resource references and empty paths remain stable when unchanged. One ResizeObserver owns canvas sizing. Server route/timing rules unchanged.
+- Verification: frontend production build; 6 ferry motion tests (including jitter, suspension and drift); gesture checks. Browser at 844x390: topbar toggled with exact equal rects for rail, sidebar, history, composer, canvas and tools. Chat/side navigation, map tools, local boat sailing and 1280x800 canvas resize checked. Browser timing API unavailable in evaluate, so no FPS benchmark claimed; real phone remains to be checked by user.
+- Local temporary UI account removed, ferry fixture restored. Screenshots .local/mobile-stable-header.png and .local/mobile-boat-motion.png.
+- Frontend-only release: server not restarted, database untouched. Backup /opt/qingyu/backups/frontend-20261001-122248/. Public index + entry JS/CSS byte-matched local build, HTTPS health OK.
