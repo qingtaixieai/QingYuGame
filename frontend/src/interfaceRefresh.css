@@ -7,3 +7,37 @@
 @media(max-height:600px) and (orientation:landscape){.game-shell .chat-history{padding:6px;min-height:32px}.game-shell .conversation-title{padding:6px 8px;font-size:11px}.game-shell .chat-toolbar{gap:5px}.game-shell .chat-toolbar small{font-size:9px}.game-shell .chat-send-row{margin-top:3px}.game-shell .chat-send-row button{padding:5px 9px;font-size:10px}.game-shell .chat-message .message-content{padding:6px 8px;font-size:11px}.game-shell .chat-meta{font-size:9px}.game-shell .chat-emotes{padding:5px;gap:3px}.game-shell .chat-emotes button{padding:4px;min-width:35px}.game-shell .chat-emotes svg{width:21px;height:21px}.game-shell .image-manager{padding:8px;max-height:40vh;overflow:auto}.game-shell .image-manager p{font-size:10px}}
 @media(pointer:coarse) and (max-width:1000px) and (orientation:portrait){.game-shell>.workspace,.game-shell>.workspace *{visibility:hidden!important;pointer-events:none!important}}
 .character-panel .item-detail{position:relative;bottom:auto;box-shadow:none}
+
+/* Compact phone chat chrome leaves the conversation as the primary content. */
+@media (max-height:600px) and (orientation:landscape){
+ .game-shell .topbar .brand-mark{display:none}
+ .game-shell .top-toggle{background:#476e58;color:#f2edd0;border-color:#a5b58d;border-radius:8px 3px}
+ .game-shell .sidebar.chat-sidebar .chat-heading{padding:5px 8px;flex-shrink:0}
+ .game-shell .sidebar.chat-sidebar .chat-heading h2{margin:0;font-size:13px;line-height:20px}
+ .game-shell .chat-heading h2 svg{width:16px;height:16px}
+ .game-shell .chat-tabs{margin:0 8px;gap:6px;flex-shrink:0}
+ .game-shell .chat-tabs button{padding:4px 6px;min-height:27px;font-size:11px;line-height:16px}
+ .game-shell .conversation-title{min-height:27px;padding:2px 8px;gap:5px;flex-shrink:0}
+ .game-shell .conversation-title strong{font-size:11px}
+ .game-shell .conversation-title small{font-size:8px}
+ .game-shell .conversation-title .icon-button{width:24px;height:24px;padding:3px;flex-shrink:0}
+ .game-shell .chat-history{flex:1;min-height:40px;padding:7px 8px}
+ .game-shell .chat-message{margin-bottom:9px}
+ .game-shell .chat-meta{margin-bottom:3px;font-size:9px}
+ .game-shell .chat-message .message-content{font-size:12px;line-height:1.55;padding:6px 8px}
+ .game-shell .chat-picture{max-width:100%;max-height:140px}
+ .game-shell .chat-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 5px;padding:4px 6px 6px;flex-shrink:0}
+ .game-shell .chat-toolbar{grid-column:1/-1;margin:0;gap:3px}
+ .game-shell .chat-toolbar .icon-button{width:26px;height:24px;padding:3px}
+ .game-shell .chat-toolbar svg{width:16px;height:16px}
+ .game-shell .chat-toolbar small{font-size:8px}
+ .game-shell .chat-composer textarea{height:34px;min-height:34px;max-height:34px;padding:6px;font-size:12px;line-height:20px;resize:none}
+ .game-shell .chat-send-row{margin:0;position:relative;align-self:stretch}
+ .game-shell .chat-send-row .primary{height:34px;padding:5px 7px;gap:3px;font-size:10px}
+ .game-shell .chat-send-row .primary svg{width:12px;height:12px}
+ .game-shell .chat-error{position:absolute;bottom:100%;right:0;width:210px;padding:5px;background:#fff3df;border:1px solid #d6c5a0;border-radius:4px;z-index:2}
+ .game-shell .chat-emotes{flex-shrink:0}
+}
+/* Each actor's name, health number and bar have separate vertical bands. */
+.battle-actor .battle-actor-name{font-size:10px}
+.battle-actor .health-text{font:9px 'Microsoft YaHei',sans-serif}

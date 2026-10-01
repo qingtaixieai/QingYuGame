@@ -146,3 +146,13 @@
 - Verification: frontend production build; 6 ferry motion tests (including jitter, suspension and drift); gesture checks. Browser at 844x390: topbar toggled with exact equal rects for rail, sidebar, history, composer, canvas and tools. Chat/side navigation, map tools, local boat sailing and 1280x800 canvas resize checked. Browser timing API unavailable in evaluate, so no FPS benchmark claimed; real phone remains to be checked by user.
 - Local temporary UI account removed, ferry fixture restored. Screenshots .local/mobile-stable-header.png and .local/mobile-boat-motion.png.
 - Frontend-only release: server not restarted, database untouched. Backup /opt/qingyu/backups/frontend-20261001-122248/. Public index + entry JS/CSS byte-matched local build, HTTPS health OK.
+
+## 2026-10-01 手机聊天与战斗头顶信息修正
+
+- 用户逐项确认本轮范围：仅修复手机聊天、顶部树标、侧栏按钮与战斗头顶布局；同步装备设计，不实现主副手和换装。
+- 手机横屏消息区扩大，缩小标题/标签/会话说明，将输入和发送放同一行；正文12px，桌面聊天规则不变。844x390实测消息区190px（前版约71px），输入工具区约72px。
+- 顶部原游戏树标左移作为唯一展开/收起入口，隐藏原品牌重复树标，侧栏恢复方框箭头；地图工具保持放大镜，顶栏隐藏占位保持。
+- 战场姓名、生命数值与血条分层；桌面DOM实际文字边界互不重叠，横屏截图检查通过。当前战场无采集进度条，未新增虚假的长行动机制；大世界既有行动条不变。
+- 前端生产构建通过；浏览器验证手机聊天发送、公私聊切换，桌面1280x800聊天各区矩形与修改前完全相同；顶部切换前后导航/面板/战场/顺序条矩形相同。界面截图.local/mobile-chat-compact.png与battle-labels-fixed.png。本地临时账号、消息、怪物与战场已清理。
+- 已前端发布，未重启后端或改生产数据库。备份 /opt/qingyu/backups/frontend-20261001-182703/，公网HTML和入口JS/CSS与本地构建逐字节一致。真实手机待用户体验，非所有设备保证。
+- 本地Word设计文档同步已确认换装规则，标记待实现；Word内容检查通过，环境缺失LibreOffice且原生Word启动失败，分页视觉核验未完成。
