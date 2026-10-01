@@ -278,7 +278,8 @@ public class WorldService {
     }
     public synchronized CharacterService.Character character(UUID id){return characters.get(id);}
     public synchronized List<Map<String,Object>> catalog(){return equipment.catalog();}
-    public synchronized void equip(UUID id,String code){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中不能更换武器");tx.executeWithoutResult(s->equipment.equip(id,code));broadcast();}
+    public synchronized void equip(UUID id,String code){equip(id,code,null);}
+    public synchronized void equip(UUID id,String main,String off){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中请使用战斗栏换装");tx.executeWithoutResult(s->equipment.equip(id,main,off));broadcast();}
     public synchronized void grant(UUID admin,UUID target,String code,int quantity){accounts.get(target);tx.executeWithoutResult(s->{equipment.give(target,code,quantity);audit(admin,"grant-item",target+":"+code+":"+quantity);});broadcast();}
     public synchronized void lifeAction(UUID id,String action,UUID target){
         if(action==null)throw AccountService.bad("请选择行动");
@@ -296,11 +297,16 @@ public class WorldService {
                     case "revive" -> {characters.returnToMark(id,now);battles.rejoinAtCell(id,now);}
                     case "cancel" -> characters.cancelTimer(id);
                     case "rescue" -> {characters.requireAlive(id);var a=characters.get(id);var t=characters.get(target);if(t.npc()||!a.hex().equals(t.hex())||battles.engaged(target))throw AccountService.bad("请与倒地旅人处于同一世界格");characters.rescue(target);}
+                    case "bandage" -> {characters.requireAlive(id);var a=characters.get(id);UUID healTarget=target==null?id:target;var t=characters.get(healTarget);if(!a.hex().equals(t.hex()))throw AccountService.bad("战斗外绷带只能治疗同格角色");if(!t.alive())throw AccountService.bad("只能治疗站立存活角色");if(t.hp()>=t.maxHp())throw AccountService.bad("目标已满血");equipment.consume(id,"bandage",1);characters.heal(healTarget,4);}
                     default -> throw AccountService.bad("行动不存在");
                 }
             }
         });battleRevision++;broadcast();
     }
+    public synchronized void battleGuard(UUID actor,UUID battleId){requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.guard(actor,System.currentTimeMillis()));battleRevision++;broadcast();}
+    public synchronized void battleCancelGuard(UUID actor,UUID battleId){requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.cancelGuard(actor,System.currentTimeMillis()));battleRevision++;broadcast();}
+    public synchronized void battleBandage(UUID actor,UUID target){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.bandage(actor,target,onlineUsers(),System.currentTimeMillis()));battleRevision++;broadcast();}
+    public synchronized void battleEquip(UUID actor,String main,String off){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.equip(actor,main,off,onlineUsers(),System.currentTimeMillis()));battleRevision++;broadcast();}
     private void broadcast(){
         if(connections.isEmpty())return;
 

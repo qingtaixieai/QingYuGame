@@ -1,10 +1,10 @@
 import {bindMapGestures} from './mapGestures';
 import {MapTools} from './MapTools';
 import {useEffect,useMemo,useRef,useState} from 'react';
-import {Footprints,Swords,SkipForward,LogOut,LocateFixed,Plus,Minus,Maximize,HeartHandshake,Sparkles,Package,Lock} from 'lucide-react';
+import {Footprints,Swords,SkipForward,LogOut,LocateFixed,Plus,Minus,Maximize,HeartHandshake,Sparkles,Package,Lock,Shield,BriefcaseMedical,RefreshCw,EyeOff} from 'lucide-react';
 import {attackCells,hexDistance,retainsAttack} from './combatRules';
 import {api} from './api';
-import type {BattleState,Hex} from './types';
+import type {BattleState,Hex,Item} from './types';
 const SIZE=36;
 const xy=(h:Hex)=>({x:1.5*SIZE*h.q,y:Math.sqrt(3)*SIZE*(h.r+h.q/2)});
 const distance=(a:Hex,b:Hex)=>Math.max(Math.abs(a.q-b.q),Math.abs(a.r-b.r),Math.abs(a.q+a.r-b.q-b.r));
@@ -14,7 +14,7 @@ function tiles(radius:number){const result:Hex[]=[];for(let r=-radius;r<=radius;
 function Sprite({color='#b87855',monster=false}:{color?:string;monster?:boolean}){if(monster)return <g shapeRendering="crispEdges"><ellipse cy="13" rx="18" ry="5" fill="#384636" opacity=".3"/><path d="M-13-10h26v23h-26M-18-8h7v18h-7M11-8h7v18h-7" fill="#85503f"/><path d="M-10-26h20v18h-20" fill="#b07852"/><path d="M-14-33h6v12h-6M8-33h6v12H8" fill="#ede1bc"/><path d="M-6-21h4v4h-4M3-21h4v4H3" fill="#ffce69"/><path d="M-11 10h8v7h-8M3 10h8v7H3" fill="#4a3a31"/></g>;return <g shapeRendering="crispEdges"><ellipse cy="13" rx="15" ry="5" fill="#253b38" opacity=".23"/><path d="M-10-9h20v22H-10z" fill="#34483f"/><path d="M-9-8h18v17H-9z" fill={color}/><path d="M-6-7h4V6h-4z" fill="#ffffff" opacity=".25"/><path d="M-9 8h7v8h-7zm12 0h7v8H3z" fill="#394039"/><path d="M-8-25H8v18H-8z" fill="#efd4a4"/><path d="M-9-27H8v5H-9zM-11-23h6v9h-6zM5-23h5v5H5z" fill="#67513d"/><path d="M-3-18h2v3h-2zm7 0h2v3H4z" fill="#3b4037"/><path d="M-13-6h5v11h-5z" fill="#efd4a4"/><path d="M12-14h3v21h-3z" fill="#e9e8cb"/><path d="M9 4h9v3H9z" fill="#a58a51"/><path d="M-8 3H8v3H-8z" fill="#795c3d"/></g>;}
 function Tree(){return <g shapeRendering="crispEdges"><ellipse cy="15" rx="23" ry="7" fill="#486448" opacity=".22"/><path d="M-4-6H4v24H-4z" fill="#76634a"/><path d="M-2-3H2v20H-2z" fill="#ab8857"/><path d="M-20-31h40v25h-40zM-14-43h28v44h-28zM-25-23h50v13h-50z" fill="#486c53"/><path d="M-20-30h33v20h-33zM-12-42h25v28h-25zM-25-21h35v10h-35z" fill="#6d935e"/><path d="M-12-41H5v8h-17zM-20-28h12v10h-12zM6-30h9v6H6z" fill="#98b777"/><path d="M-7-23H5v9H-7zM10-14h7v5h-7z" fill="#7da464"/><path d="M-15-9h8v4h-8z" fill="#afbf7c"/></g>;}
 function Rock(){return <g shapeRendering="crispEdges"><ellipse cy="10" rx="19" ry="5" fill="#516149" opacity=".2"/><path d="M-17-4h8v-9H7v5h9v19h-33z" fill="#788778"/><path d="M-15-3h8v-8H5v5h8v9h-28z" fill="#b0b6a0"/><path d="M-6-10H4v7H-6z" fill="#d0d0b6"/><path d="M-14 5H3v5h-17z" fill="#95a18a"/><path d="M8 5h10v8H8z" fill="#6e865d"/></g>;}
-export function BattleView({battle,me,connected,clock,onChanged,onMessage}:{battle:Extract<BattleState,{active:true}>;me:string;connected:boolean;clock:number;onChanged:()=>Promise<void>;onMessage:(message:string)=>void}){
+export function BattleView({battle,me,items,connected,clock,onChanged,onMessage}:{battle:Extract<BattleState,{active:true}>;me:string;items:Item[];connected:boolean;clock:number;onChanged:()=>Promise<void>;onMessage:(message:string)=>void}){
  const [hover,setHover]=useState<Hex|null>(null);
  const [mode,setMode]=useState<'inspect'|'move'|'attack'>('inspect');
  const [selected,setSelected]=useState<Hex|null>(null),[movePreview,setMovePreview]=useState<Hex|null>(null),[busy,setBusy]=useState(false),[zoom,setZoom]=useState(()=>window.matchMedia('(max-height:600px) and (orientation:landscape)').matches?1.7:1),[center,setCenter]=useState({x:0,y:0});
@@ -48,6 +48,9 @@ export function BattleView({battle,me,connected,clock,onChanged,onMessage}:{batt
  useEffect(()=>{const timer=setInterval(()=>{for(const [id,path] of paths.current){const next=path.shift();if(next)setVisual(v=>({...v,[id]:next}));if(!path.length)paths.current.delete(id);}},110);return()=>clearInterval(timer);},[]);
  const enabled=connected&&myTurn&&!busy&&own?.character.life==='alive';
  const weapon=own?.weapon;
+ const bandages=items.find(i=>i.code==='bandage')?.quantity??0;
+ const weapons=items.filter(i=>i.kind==='weapon'&&i.quantity>0);
+ const shields=items.filter(i=>i.kind==='shield'&&i.quantity>0);
  const shapeAt=(h:Hex)=>own&&weapon?attackCells(weapon,own,h).filter(c=>hexDistance({q:0,r:0},c)<=battle.radius):[];
  const selectable=(h:Hex)=>!!own&&!!weapon&&attackCells(weapon,own,h).length>0&&attackCells(weapon,own,h).every(c=>hexDistance({q:0,r:0},c)<=battle.radius);
  const pendingAttack=battle.intents.find(i=>i.attackerId===me);
@@ -59,6 +62,7 @@ export function BattleView({battle,me,connected,clock,onChanged,onMessage}:{batt
  const seconds=Math.max(0,Math.ceil((battle.turnDeadline-clock)/1000));
  const span=890/zoom;
  async function command(path:string,body:object){if(busy)return;setBusy(true);try{await api('/battle/'+path,{battleId:battle.id,...body});await onChanged();return true;}catch(e){onMessage((e as Error).message);return false;}finally{setBusy(false);}}
+ async function quickEquip(item:Item){const main=item.kind==='weapon'?item.code:(item.hand_usage==='off_two'?null:own?.character.weapon??null),off=item.kind==='shield'?item.code:(item.hand_usage==='main_two'?null:own?.character.offhand??null);await command('equipment',{mainHand:main,offHand:off});}
  function choose(h:Hex){
 
    if(mode==='move'){
@@ -100,12 +104,14 @@ export function BattleView({battle,me,connected,clock,onChanged,onMessage}:{batt
  {recentAttack&&<g key={recentAttack.id} transform={`translate(${xy({q:recentAttack.q!,r:recentAttack.r!}).x} ${xy({q:recentAttack.q!,r:recentAttack.r!}).y})`} pointerEvents="none"><path className="battle-attack-flash" d="M-22 20L22-25M-16-22L18 19" stroke="#fff1c0" strokeWidth="7"/></g>}
  </svg>
  <MapTools className="battle-tools" onMessage={onMessage}><button title="放大战场" aria-label="放大战场" onClick={()=>setZoom(z=>Math.min(2.8,z*1.2))}><Plus size={18}/></button><button title="缩小战场" aria-label="缩小战场" onClick={()=>setZoom(z=>Math.max(.65,z/1.2))}><Minus size={18}/></button><button title="查看全场" aria-label="查看全场" onClick={()=>{setCenter({x:0,y:0});setZoom(.8);}}><Maximize size={18}/></button><button title="定位自己" aria-label="定位自己" onClick={()=>own&&locate(own)}><LocateFixed size={18}/></button></MapTools>
- <div className="battle-action-dock tactical-dock" aria-label="战斗操作栏"><div className="action-points"><strong>{myTurn?battle.turnPoints:'—'}</strong><small>行动点</small><div className="ap-pips">{Array.from({length:6},(_,i)=><i key={i} className={myTurn&&i<battle.turnPoints?'available':''}/>)}</div></div>
+ <div className="battle-action-dock tactical-dock" aria-label="战斗操作栏"><div className="action-points"><strong>{myTurn?battle.turnPoints:'—'}</strong><small>行动点</small><div className="ap-pips">{Array.from({length:6},(_,i)=><i key={i} className={myTurn&&i<battle.turnPoints?'available':''}/>)}</div><small>反应 {own?.reactionPoints??0}/2</small></div>
  <div className="hotbar-group"><div className="hotbar-slots"><button title="移动：选择路线，再点同一格确认；每格1点" className={mode==='move'?'chosen':''} aria-pressed={mode==='move'} disabled={!enabled||battle.turnPoints<1} onClick={()=>{setMovePreview(null);setSelected(null);setMode(m=>m==='move'?'inspect':'move');}}><Footprints/><span>移动</span><small>1 / 格</small></button>
  <button title={`${weapon?.name||'空手'}：预设攻击，消耗${weapon?.cost??2}点`} className={'attack-mode '+(mode==='attack'?'chosen':'')} aria-pressed={mode==='attack'} disabled={!enabled||battle.turnPoints<(weapon?.cost??2)} onClick={()=>{setMovePreview(null);setSelected(null);setMode(m=>m==='attack'?'inspect':'attack');}}><Swords/><span>攻击</span><small>{weapon?.cost??2} 点</small></button>
+ <button title="举盾：将最多2点行动点转为反应点，自动格挡可格挡攻击" disabled={!enabled||!own?.loadout.canGuard||battle.turnPoints<1||own.reactionPoints>=2} onClick={()=>void command('guard',{})}><Shield/><span>{own?.shieldRaised?'补充盾势':'举盾'}</span><small>{own?.reactionPoints??0}/2</small></button>
  <button title="选择相邻倒地旅人，保留完整6点救起" disabled={!enabled||battle.turnPoints!==6||target?.character.life!=='down'||target.character.kind!=='player'||!own||distance(own,target)!==1} onClick={async()=>{if(!target)return;try{await api('/character/action',{action:'rescue',targetId:target.accountId});await onChanged();}catch(e){onMessage((e as Error).message);}}}><HeartHandshake/><span>救援</span><small>6 点</small></button></div><span className="hotbar-label">常用行动</span></div>
- <div className="hotbar-group reserved"><div className="hotbar-slots">{[0,1,2].map(i=><button key={i} disabled title="技能槽 · 尚未开放" aria-label={`技能槽${i+1}，尚未开放`}><Sparkles/><Lock size={10}/></button>)}</div><span className="hotbar-label">技能 · 待开放</span></div>
- <div className="hotbar-group reserved"><div className="hotbar-slots">{[0,1].map(i=><button key={i} disabled title="战斗物品槽 · 尚未开放" aria-label={`物品槽${i+1}，尚未开放`}><Package/><Lock size={10}/></button>)}</div><span className="hotbar-label">物品 · 待开放</span></div>
+ <div className="hotbar-group"><div className="hotbar-slots"><button title="绷带：治疗自己或相邻站立角色4点生命，消耗2点和1个绷带" disabled={!enabled||battle.turnPoints<2||bandages<1} onClick={()=>void command('bandage',{targetId:target?.accountId??me})}><BriefcaseMedical/><span>绷带</span><small>{bandages} 个</small></button>{[...weapons,...shields].slice(0,3).map(i=><button key={i.code} title={`换装 ${i.name}：战斗中消耗2点；成功后取消自己的未触发红格`} disabled={!enabled||battle.turnPoints<2} onClick={()=>void quickEquip(i)}><RefreshCw/><span>{i.name}</span><small>2 点</small></button>)}</div><span className="hotbar-label">物品 / 换装</span></div>
+ <div className="hotbar-group reserved"><div className="hotbar-slots">{[0,1,2].map(i=><button key={i} title="尚未开放：真实技能稍后加入，点击不消耗行动点" aria-label={`技能槽${i+1}，尚未开放`} onClick={()=>onMessage('技能尚未开放，本次不会消耗行动点。')}><Sparkles/><Lock size={10}/></button>)}</div><span className="hotbar-label">能力</span></div>
+ <div className="hotbar-group reserved"><div className="hotbar-slots"><button title="被动：装备护甲和盾牌被动已自动生效" onClick={()=>onMessage(`当前被动护甲 +${own?.loadout.armor??0}`)}><EyeOff/><span>被动</span><small>护甲 +{own?.loadout.armor??0}</small></button><button title="自定义栏尚未开放，点击不消耗行动点" onClick={()=>onMessage('自定义栏尚未开放，本次不会消耗行动点。')}><Package/><Lock size={10}/></button></div><span className="hotbar-label">被动 / 自定义</span></div>
  <button className="end-turn" disabled={!enabled} onClick={()=>{setMovePreview(null);setMode('inspect');void command('end-turn',{});}}><SkipForward/><span>结束回合</span></button></div>
  <div className="battle-actions"><div className="battle-selection">{own?.withdrawDirection!=null?'正在等待撤离':own&&own.entryRound>battle.round?'下一轮开始行动':mode==='move'?previewPath?`路线 ${previewPath.length} 格 · 消耗 ${previewPath.length} 点 · 余 ${battle.turnPoints-previewPath.length} 点${moveTriggers?' · 途中触发原红格攻击':''}；再点同一格移动，点其他格取消`:`选择白色范围内的空格预览路线 · 剩余 ${battle.turnPoints} 点`:mode==='attack'?`${weapon?.name} · 选择攻击方向/格子 · ${weapon?.damage} 伤害 · ${weapon?.cost} 点`:selected?`${target?.username||'草地'} · ${selected.q}, ${selected.r}`:'先选择下方的移动或攻击'}</div>
  {target?.character.life==='down'&&target.character.kind==='player'&&own&&distance(own,target)===1&&<button disabled={!enabled||battle.turnPoints!==6} onClick={async()=>{try{await api('/character/action',{action:'rescue',targetId:target.accountId});await onChanged();}catch(e){onMessage((e as Error).message);}}}>救起 {target.username} · 6点</button>}

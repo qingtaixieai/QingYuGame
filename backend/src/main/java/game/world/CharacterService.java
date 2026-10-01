@@ -9,7 +9,7 @@ import java.util.*;
 @Service
 public class CharacterService {
     public record Character(UUID id,String kind,String name,int q,int r,int hp,int maxHp,int downHp,int maxDownHp,String life,
-        int strength,int agility,int constitution,int intellect,int perception,int willpower,String weapon,
+        int strength,int agility,int constitution,int intellect,int perception,int willpower,String weapon,String offhand,
         int bindQ,int bindR,Integer deathQ,Integer deathR,String timerKind,long timerEnd,long protectedUntil) {
         public boolean alive(){return life.equals("alive");}
         public boolean npc(){return !kind.equals("player");}
@@ -33,10 +33,11 @@ public class CharacterService {
     }
     public void ensurePlayers(){db.update("insert into characters(id,account_id,bind_q,bind_r) select id,id,?,? from accounts on conflict(id) do nothing",world.spawn().q(),world.spawn().r());}
     private static final String PROFILE_SQL="select c.*,coalesce(a.username,c.name) as display_name,coalesce(a.q,c.q) as world_q,coalesce(a.r,c.r) as world_r from characters c left join accounts a on a.id=c.account_id";
-    private static final org.springframework.jdbc.core.RowMapper<Character> PROFILE=(r,n)->new Character(r.getObject("id",UUID.class),r.getString("kind"),r.getString("display_name"),r.getInt("world_q"),r.getInt("world_r"),r.getInt("hp"),r.getInt("max_hp"),r.getInt("down_hp"),r.getInt("max_down_hp"),r.getString("life"),r.getInt("strength"),r.getInt("agility"),r.getInt("constitution"),r.getInt("intellect"),r.getInt("perception"),r.getInt("willpower"),r.getString("weapon"),r.getInt("bind_q"),r.getInt("bind_r"),(Integer)r.getObject("death_q"),(Integer)r.getObject("death_r"),r.getString("timer_kind"),r.getLong("timer_end"),r.getLong("protected_until"));
+    private static final org.springframework.jdbc.core.RowMapper<Character> PROFILE=(r,n)->new Character(r.getObject("id",UUID.class),r.getString("kind"),r.getString("display_name"),r.getInt("world_q"),r.getInt("world_r"),r.getInt("hp"),r.getInt("max_hp"),r.getInt("down_hp"),r.getInt("max_down_hp"),r.getString("life"),r.getInt("strength"),r.getInt("agility"),r.getInt("constitution"),r.getInt("intellect"),r.getInt("perception"),r.getInt("willpower"),r.getString("weapon"),r.getString("offhand"),r.getInt("bind_q"),r.getInt("bind_r"),(Integer)r.getObject("death_q"),(Integer)r.getObject("death_r"),r.getString("timer_kind"),r.getLong("timer_end"),r.getLong("protected_until"));
     public List<Character> all(){return db.query(PROFILE_SQL,PROFILE);}
     public Character get(UUID id){return db.query(PROFILE_SQL+" where c.id=?",PROFILE,id).stream().findFirst().orElseThrow(()->AccountService.bad("角色不存在"));}
-    public WeaponRules.Weapon weapon(UUID id){var c=get(id);return c.npc()?WeaponRules.CLAWS:equipment.weapon(c.weapon);}
+    public WeaponRules.Weapon weapon(UUID id){var c=get(id);return c.npc()?WeaponRules.CLAWS:equipment.loadout(id).weapon();}
+    public EquipmentService.Loadout loadout(UUID id){return equipment.loadout(id);}
     public void requireAlive(UUID id){if(!get(id).alive())throw AccountService.bad("倒地或灵魂状态不能执行此行动");}
     public void relocate(UUID id,int q,int r){var c=get(id);if(c.npc())db.update("update characters set q=?,r=? where id=?",q,r,id);else db.update("update accounts set q=?,r=? where id=?",q,r,id);}
     public void cancelTimer(UUID id){db.update("update characters set timer_kind=null,timer_end=0 where id=? and life<>'dead'",id);}
@@ -50,6 +51,13 @@ public class CharacterService {
         }
         int hp=Math.max(0,c.downHp-amount);db.update("update characters set down_hp=? where id=?",hp,id);
         if(hp==0){die(id,now);return "death";}return "hit";
+    }
+    public String heal(UUID id,int amount){
+        var c=get(id);
+        if(!c.life.equals("alive"))throw AccountService.bad("只能治疗站立存活角色");
+        if(c.hp>=c.maxHp)return "full";
+        db.update("update characters set hp=least(max_hp,hp+?) where id=?",amount,id);
+        return "healed";
     }
     public void die(UUID id,long now){
         var c=get(id);if(c.life.equals("soul")||c.life.equals("dead"))return;

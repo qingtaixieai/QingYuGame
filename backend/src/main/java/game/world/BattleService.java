@@ -32,19 +32,20 @@ public class BattleService {
     private final JdbcTemplate db;
     private final AccountService accounts;
     private final CharacterService characters;
+    private final EquipmentService equipment;
     private final tools.jackson.databind.json.JsonMapper json=tools.jackson.databind.json.JsonMapper.builder().build();
     private final Map<UUID,Long> aiNext=new HashMap<>();
     private final long turnMillis;
 
     public record Summary(UUID id,int q,int r,int participants) {}
-    public record Actor(UUID accountId,String username,String color,int q,int r,int initiative,int entryRound,boolean online,Integer withdrawDirection,CharacterService.Character character,WeaponRules.Weapon weapon,int initiativeRoll,int initiativeScore) {}
+    public record Actor(UUID accountId,String username,String color,int q,int r,int initiative,int entryRound,boolean online,Integer withdrawDirection,CharacterService.Character character,WeaponRules.Weapon weapon,EquipmentService.Loadout loadout,int initiativeRoll,int initiativeScore,int reactionPoints,boolean shieldRaised,List<String> actions) {}
     public record Intent(UUID attackerId,UUID targetId,int q,int r,String visibility,List<WorldMap.Hex> cells,String weapon,int damage,int minRange,int maxRange,String moveRule,Integer originQ,Integer originR) {}
     public record Event(long id,String kind,UUID actorId,UUID targetId,Integer q,Integer r,long happenedAt) {}
     private record Encounter(UUID id,String version,int q,int r,int round,UUID turn,int points,boolean attackUsed,long deadline,int nextInitiative,boolean turnStartEdge) {}
     private record Position(UUID id,int q,int r,int initiative,int entryRound) {}
 
-    BattleService(JdbcTemplate db,AccountService accounts,CharacterService characters,@Value("${game.battle.turn-ms:45000}") long turnMillis){
-        this.db=db;this.accounts=accounts;this.characters=characters;this.turnMillis=Math.max(5000,turnMillis);
+    BattleService(JdbcTemplate db,AccountService accounts,CharacterService characters,EquipmentService equipment,@Value("${game.battle.turn-ms:45000}") long turnMillis){
+        this.db=db;this.accounts=accounts;this.characters=characters;this.equipment=equipment;this.turnMillis=Math.max(5000,turnMillis);
     }
 
     private List<Encounter> encounters(String where,Object... args){
@@ -78,8 +79,8 @@ public class BattleService {
     public Object current(UUID viewer,Set<UUID> online){
         Encounter b=forActor(viewer);
         if(b==null)return Map.of("active",false);
-        List<Actor> actors=db.query("select a.account_id,c.username,c.color,a.q,a.r,a.initiative,a.entry_round,a.withdraw_direction,a.initiative_roll,a.initiative_score from battle_actors a left join accounts c on c.id=a.account_id where a.encounter_id=? order by a.initiative",
-            (rs,n)->new Actor(rs.getObject(1,UUID.class),characters.get(rs.getObject(1,UUID.class)).name(),Objects.requireNonNullElse(rs.getString(3),"#9aa69b"),rs.getInt(4),rs.getInt(5),rs.getInt(6),rs.getInt(7),(online.contains(rs.getObject(1,UUID.class))||characters.get(rs.getObject(1,UUID.class)).npc()),(Integer)rs.getObject(8),characters.get(rs.getObject(1,UUID.class)),characters.weapon(rs.getObject(1,UUID.class)),rs.getInt(9),rs.getInt(10)),b.id());
+        List<Actor> actors=db.query("select a.account_id,c.username,c.color,a.q,a.r,a.initiative,a.entry_round,a.withdraw_direction,a.initiative_roll,a.initiative_score,a.reaction_points,a.shield_raised from battle_actors a left join accounts c on c.id=a.account_id where a.encounter_id=? order by a.initiative",
+            (rs,n)->{UUID id=rs.getObject(1,UUID.class);var c=characters.get(id);var l=characters.loadout(id);return new Actor(id,c.name(),Objects.requireNonNullElse(rs.getString(3),"#9aa69b"),rs.getInt(4),rs.getInt(5),rs.getInt(6),rs.getInt(7),(online.contains(id)||c.npc()),(Integer)rs.getObject(8),c,l.weapon(),l,rs.getInt(9),rs.getInt(10),rs.getInt("reaction_points"),rs.getBoolean("shield_raised"),actions(c,l));},b.id());
         List<Intent> intents=intents(b.id()).stream().filter(i->i.visibility().equals("public")||i.attackerId().equals(viewer)).toList();
         List<Event> events=db.query("select id,kind,actor_id,target_id,q,r,happened_at from battle_events where encounter_id=? order by id desc limit 16",
             (rs,n)->new Event(rs.getLong(1),rs.getString(2),rs.getObject(3,UUID.class),rs.getObject(4,UUID.class),(Integer)rs.getObject(5),(Integer)rs.getObject(6),rs.getLong(7)),b.id());
@@ -89,6 +90,13 @@ public class BattleService {
         out.put("round",b.round());out.put("turnAccountId",b.turn());out.put("turnPoints",b.points());out.put("turnDeadline",b.deadline());
         out.put("attackUsed",b.attackUsed());out.put("actors",actors);out.put("intents",intents);out.put("events",events);out.put("edges",edges(b));out.put("turnStartEdge",b.turnStartEdge());
         return out;
+    }
+    private List<String> actions(CharacterService.Character c,EquipmentService.Loadout l){
+        List<String> out=new ArrayList<>();
+        if(c.alive()){out.add("move");if(l.weapon().damage()>0)out.add("attack");out.add("endTurn");}
+        if(l.canGuard())out.add("guard");
+        if(c.kind().equals("player")){out.add("bandage");out.add("rescue");}
+        out.add("withdraw");return out;
     }
 
     public UUID start(UUID actor,UUID target,String version,WorldMap world,long now){
@@ -237,6 +245,7 @@ public class BattleService {
         if(next==null)throw new IllegalStateException("Battle has no eligible actor");
         db.update("update battle_encounters set round_number=?,turn_account_id=?,turn_points=?,attack_used=false,turn_deadline=?,turn_start_edge=? where id=?",
             round,next.id(),characters.get(next.id()).alive()?TURN_POINTS:0,now+turnMillis,exit(next.q(),next.r()),b.id());
+        db.update("update battle_actors set reaction_points=0,shield_raised=false where encounter_id=? and account_id=?",b.id(),next.id());
         event(b.id(),"turn",next.id(),null,null,null,now);
         Integer withdrawal=db.queryForObject("select withdraw_direction from battle_actors where encounter_id=? and account_id=?",Integer.class,b.id(),next.id());
         if(withdrawal!=null){
@@ -254,13 +263,67 @@ public class BattleService {
         }
     }
     private void hit(UUID battle,UUID attacker,UUID target,int q,int r,int damage,long now){
-        String result=characters.damage(target,damage,now);
+        int effective=effectiveDamage(battle,target,damage);
+        String result=effective<=0?"hit":characters.damage(target,effective,now);
         if(result.equals("protected"))return;
         if(result.equals("down")||result.equals("death")){db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,target);event(battle,result,attacker,target,q,r,now);}
         if(result.equals("death"))db.update("delete from battle_actors where encounter_id=? and account_id=?",battle,target);
         event(battle,"attack",attacker,target,q,r,now);
         if(db.update("update battle_actors set withdraw_direction=null where encounter_id=? and account_id=? and withdraw_direction is not null",battle,target)>0)
             event(battle,"withdraw-interrupted",target,attacker,q,r,now);
+    }
+    private int effectiveDamage(UUID battle,UUID target,int damage){
+        if(damage<=0)return 0;
+        var loadout=characters.loadout(target);
+        int afterArmor=Math.max(0,damage-loadout.armor());
+        if(damage>0&&afterArmor==0)afterArmor=1;
+        Integer rp=db.queryForObject("select reaction_points from battle_actors where encounter_id=? and account_id=?",Integer.class,battle,target);
+        Boolean raised=db.queryForObject("select shield_raised from battle_actors where encounter_id=? and account_id=?",Boolean.class,battle,target);
+        if(Boolean.TRUE.equals(raised)&&rp!=null&&rp>0&&loadout.canGuard()){
+            int guarded=Math.max(loadout.guardMinDamage(),afterArmor-loadout.guardReduction());
+            if(guarded<afterArmor){
+                db.update("update battle_actors set reaction_points=reaction_points-1 where encounter_id=? and account_id=?",battle,target);
+                return guarded;
+            }
+        }
+        return afterArmor;
+    }
+    public void guard(UUID actor,long now){
+        Encounter b=requireTurn(actor);requireStanding(actor);
+        var loadout=characters.loadout(actor);if(!loadout.canGuard())throw bad("需要装备盾牌才能举盾");
+        Integer rp=db.queryForObject("select reaction_points from battle_actors where encounter_id=? and account_id=?",Integer.class,b.id(),actor);
+        int add=Math.min(2-(rp==null?0:rp),b.points());
+        if(add<=0)throw bad("反应点已满或行动点不足");
+        db.update("update battle_actors set reaction_points=reaction_points+?,shield_raised=true where encounter_id=? and account_id=?",add,b.id(),actor);
+        db.update("update battle_encounters set turn_points=turn_points-? where id=?",add,b.id());
+        event(b.id(),"guard",actor,null,null,null,now);
+    }
+    public void cancelGuard(UUID actor,long now){
+        Encounter b=requireTurn(actor);
+        db.update("update battle_actors set reaction_points=0,shield_raised=false where encounter_id=? and account_id=?",b.id(),actor);
+        event(b.id(),"guard-cancel",actor,null,null,null,now);
+    }
+    public void bandage(UUID actor,UUID target,Set<UUID> online,long now){
+        Encounter b=requireTurn(actor);requireStanding(actor);if(target==null)target=actor;
+        Position a=position(b.id(),actor),t=position(b.id(),target);
+        if(t==null||distance(a.q(),a.r(),t.q(),t.r())>1)throw bad("绷带只能治疗自己或相邻角色");
+        if(b.points()<2)throw bad("行动点不足");
+        var targetProfile=characters.get(target);if(!targetProfile.alive())throw bad("只能治疗站立存活角色");
+        if(targetProfile.hp()>=targetProfile.maxHp())throw bad("目标已满血");
+        equipment.consume(actor,"bandage",1);
+        characters.heal(target,4);
+        db.update("update battle_encounters set turn_points=turn_points-2 where id=?",b.id());
+        event(b.id(),"bandage",actor,target,t.q(),t.r(),now);
+        if(b.points()==2)advanceTurn(b,a.initiative(),online,now);
+    }
+    public void equip(UUID actor,String main,String off,Set<UUID> online,long now){
+        Encounter b=requireTurn(actor);requireStanding(actor);if(b.points()<2)throw bad("行动点不足");
+        equipment.equip(actor,main,off);
+        db.update("update battle_encounters set turn_points=turn_points-2 where id=?",b.id());
+        db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
+        db.update("update battle_actors set reaction_points=0,shield_raised=false where encounter_id=? and account_id=?",b.id(),actor);
+        event(b.id(),"equip",actor,null,null,null,now);
+        if(b.points()==2)advanceTurn(b,position(b.id(),actor).initiative(),online,now);
     }
     public void withdraw(UUID actor,int direction,boolean force,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);requireStanding(actor);Position p=position(b.id(),actor);

@@ -23,12 +23,12 @@ public class GameController {
     record BattleAttack(UUID battleId,UUID targetId,Integer q,Integer r) {}
     record BattleTurn(UUID battleId) {}
     record BattleWithdraw(UUID battleId,Integer direction,boolean force) {}
-    record EquipmentRequest(String code) {}
+    record EquipmentRequest(String code,String mainHand,String offHand) {}
     record GrantRequest(String code,int quantity) {}
     record LifeRequest(String action,UUID targetId) {}
     @GetMapping("/character") public Object character(HttpServletRequest req){return world.character(accounts.require(req,true,false).id());}
     @GetMapping("/items") public Object items(HttpServletRequest req){accounts.require(req,true,false);return world.catalog();}
-    @PostMapping("/equipment") public Object equip(@RequestBody EquipmentRequest body,HttpServletRequest req){world.equip(accounts.require(req,true,false).id(),body.code());return Map.of("message","装备已更新");}
+    @PostMapping("/equipment") public Object equip(@RequestBody EquipmentRequest body,HttpServletRequest req){world.equip(accounts.require(req,true,false).id(),body.mainHand()!=null||body.offHand()!=null?body.mainHand():body.code(),body.offHand());return Map.of("message","装备已更新");}
     @PostMapping("/character/action") public Object life(@RequestBody LifeRequest body,HttpServletRequest req){world.lifeAction(accounts.require(req,true,false).id(),body.action(),body.targetId());return Map.of("message","行动已处理");}
     @PostMapping("/admin/accounts/{id}/items") public Object grant(@PathVariable UUID id,@RequestBody GrantRequest body,HttpServletRequest req){world.grant(accounts.require(req,true,true).id(),id,body.code(),body.quantity());return Map.of("message","物品已发放");}
     @GetMapping("/health") public Map<String,String> health(){return Map.of("status","ok");}
@@ -78,6 +78,20 @@ public class GameController {
     @PostMapping("/battle/end-turn") public Map<String,String> battleEndTurn(@RequestBody BattleTurn body,HttpServletRequest req){
         if(body.battleId()==null)throw AccountService.bad("战斗已变化，请刷新战场");
         world.battleEndTurn(accounts.require(req,true,false).id(),body.battleId());return Map.of("message","回合结束");
+    }
+    @PostMapping("/battle/guard") public Map<String,String> battleGuard(@RequestBody BattleTurn body,HttpServletRequest req){
+        if(body.battleId()==null)throw AccountService.bad("战斗已变化，请刷新战场");
+        world.battleGuard(accounts.require(req,true,false).id(),body.battleId());return Map.of("message","已举盾");
+    }
+    @PostMapping("/battle/cancel-guard") public Map<String,String> battleCancelGuard(@RequestBody BattleTurn body,HttpServletRequest req){
+        if(body.battleId()==null)throw AccountService.bad("战斗已变化，请刷新战场");
+        world.battleCancelGuard(accounts.require(req,true,false).id(),body.battleId());return Map.of("message","已取消举盾");
+    }
+    @PostMapping("/battle/bandage") public Map<String,String> battleBandage(@RequestBody LifeRequest body,HttpServletRequest req){
+        world.battleBandage(accounts.require(req,true,false).id(),body.targetId());return Map.of("message","已使用绷带");
+    }
+    @PostMapping("/battle/equipment") public Map<String,String> battleEquip(@RequestBody EquipmentRequest body,HttpServletRequest req){
+        world.battleEquip(accounts.require(req,true,false).id(),body.mainHand(),body.offHand());return Map.of("message","装备已更新");
     }
     record FerryRequest(String version,String item,Integer quantity) {}
     @PostMapping("/ferry/contribute") public Map<String,String> contribute(@RequestBody FerryRequest body,HttpServletRequest req){
