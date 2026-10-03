@@ -55,6 +55,8 @@ public class GameController {
     }
     @PostMapping("/stop") public Map<String,String> stop(HttpServletRequest req){world.stop(accounts.require(req,true,false).id());return Map.of("message","已停下");}
     @GetMapping("/battle/current") public Object currentBattle(HttpServletRequest req){return world.currentBattle(accounts.require(req,true,false).id());}
+    @GetMapping("/hotbar") public Object hotbar(HttpServletRequest req){return world.hotbar(accounts.require(req,true,false).id());}
+    @PostMapping("/hotbar/layout") public Object editHotbar(@RequestBody HotbarService.Edit body,HttpServletRequest req){return world.editHotbar(accounts.require(req,true,false).id(),body);}
     @PostMapping("/battle/start") public Map<String,UUID> startBattle(@RequestBody BattleStart body,HttpServletRequest req){
         if(body.targetId()==null||body.version()==null)throw AccountService.bad("请选择同格旅人");
         return Map.of("id",world.startBattle(accounts.require(req,true,false).id(),body.targetId(),body.version()));

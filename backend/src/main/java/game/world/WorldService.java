@@ -27,8 +27,8 @@ public class WorldService {
     private long tick=0,battleRevision=0;
     private final ResourceService resources;private final ModerationService moderation;
     private final CharacterService characters;private final EquipmentService equipment;
-    private final BattleService battles;private final FerryService ferry;
-    WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment){this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
+    private final BattleService battles;private final FerryService ferry;private final HotbarService hotbar;
+    WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment,HotbarService hotbar){this.hotbar=hotbar;this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
     @PostConstruct void load(){
         var rows=db.queryForList("select document from worlds where id=1",String.class);
         if(rows.isEmpty()) {world=WorldMap.generate(new SecureRandom().nextLong());db.update("insert into worlds values(1,?)",json.writeValueAsString(world));}
@@ -172,6 +172,11 @@ public class WorldService {
         if(battleId==null||!battleId.equals(battles.currentId(actor)))throw AccountService.bad("战斗已变化，请刷新战场");
     }
     public synchronized Object currentBattle(UUID actor){return battles.current(actor,onlineUsers());}
+    public synchronized HotbarService.State hotbar(UUID actor){return tx.execute(s->hotbar.state(actor,battles.current(actor,onlineUsers())));}
+    public synchronized HotbarService.State editHotbar(UUID actor,HotbarService.Edit edit){
+        var result=tx.execute(s->{hotbar.edit(actor,edit);return hotbar.state(actor,battles.current(actor,onlineUsers()));});
+        battleRevision++;broadcast();return result;
+    }
     public synchronized UUID startBattle(UUID actor,UUID target,String version){
         ferry.requireAshore(actor);ferry.requireAshore(target);
         if(routes.containsKey(actor)||routes.containsKey(target))throw AccountService.bad("双方需先在同一世界格停下");
@@ -279,8 +284,8 @@ public class WorldService {
     public synchronized CharacterService.Character character(UUID id){return characters.get(id);}
     public synchronized List<Map<String,Object>> catalog(){return equipment.catalog();}
     public synchronized void equip(UUID id,String code){equip(id,code,null);}
-    public synchronized void equip(UUID id,String main,String off){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中请使用战斗栏换装");tx.executeWithoutResult(s->equipment.equip(id,main,off));broadcast();}
-    public synchronized void grant(UUID admin,UUID target,String code,int quantity){accounts.get(target);tx.executeWithoutResult(s->{equipment.give(target,code,quantity);audit(admin,"grant-item",target+":"+code+":"+quantity);});broadcast();}
+    public synchronized void equip(UUID id,String main,String off){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中请使用战斗栏换装");tx.executeWithoutResult(s->{equipment.equip(id,main,off);hotbar.sync(id);});broadcast();}
+    public synchronized void grant(UUID admin,UUID target,String code,int quantity){accounts.get(target);tx.executeWithoutResult(s->{equipment.give(target,code,quantity);hotbar.sync(target);audit(admin,"grant-item",target+":"+code+":"+quantity);});battleRevision++;broadcast();}
     public synchronized void lifeAction(UUID id,String action,UUID target){
         if(action==null)throw AccountService.bad("请选择行动");
         long now=System.currentTimeMillis();
@@ -301,12 +306,13 @@ public class WorldService {
                     default -> throw AccountService.bad("行动不存在");
                 }
             }
+            hotbar.sync(id);
         });battleRevision++;broadcast();
     }
     public synchronized void battleGuard(UUID actor,UUID battleId){requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.guard(actor,System.currentTimeMillis()));battleRevision++;broadcast();}
     public synchronized void battleCancelGuard(UUID actor,UUID battleId){requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.cancelGuard(actor,System.currentTimeMillis()));battleRevision++;broadcast();}
-    public synchronized void battleBandage(UUID actor,UUID target){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.bandage(actor,target,onlineUsers(),System.currentTimeMillis()));battleRevision++;broadcast();}
-    public synchronized void battleEquip(UUID actor,String main,String off){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.equip(actor,main,off,onlineUsers(),System.currentTimeMillis()));battleRevision++;broadcast();}
+    public synchronized void battleBandage(UUID actor,UUID target){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->{battles.bandage(actor,target,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);});battleRevision++;broadcast();}
+    public synchronized void battleEquip(UUID actor,String main,String off){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->{battles.equip(actor,main,off,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);});battleRevision++;broadcast();}
     private void broadcast(){
         if(connections.isEmpty())return;
 

@@ -93,9 +93,9 @@ public class BattleService {
     }
     private List<String> actions(CharacterService.Character c,EquipmentService.Loadout l){
         List<String> out=new ArrayList<>();
-        if(c.alive()){out.add("move");if(l.weapon().damage()>0)out.add("attack");out.add("endTurn");}
+        if(c.alive()){out.add("move");if(l.canAttack())out.add("attack");out.add("endTurn");}
         if(l.canGuard())out.add("guard");
-        if(c.kind().equals("player")){out.add("bandage");out.add("rescue");}
+        if(c.kind().equals("player")){if(Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from inventories where account_id=? and item_code='bandage' and quantity>0)",Boolean.class,c.id())))out.add("bandage");out.add("rescue");}
         out.add("withdraw");return out;
     }
 
@@ -215,6 +215,7 @@ public class BattleService {
     }
     public void attackCell(UUID actor,int q,int r,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);requireStanding(actor);Position from=position(b.id(),actor);
+        if(!characters.loadout(actor).canAttack())throw bad("当前装备无法普通攻击");
         var weapon=characters.weapon(actor);
         var cells=WeaponRules.cells(weapon,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r));
         if(cells.isEmpty()||cells.stream().anyMatch(h->!within(h.q(),h.r())))throw bad("请选择武器可攻击的完整范围");

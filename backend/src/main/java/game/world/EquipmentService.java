@@ -10,7 +10,9 @@ public class EquipmentService {
     private final JdbcTemplate db;
     EquipmentService(JdbcTemplate db){this.db=db;}
     public record Item(String code,String name,String description,String kind,String handUsage,int passiveArmor,int guardReduction,int guardMinDamage,boolean grantsAttack) {}
-    public record Loadout(String mainHand,String offHand,WeaponRules.Weapon weapon,Item offhand,int armor,boolean canGuard,int guardReduction,int guardMinDamage) {}
+    public record Loadout(String mainHand,String offHand,WeaponRules.Weapon weapon,Item offhand,int armor,boolean canGuard,int guardReduction,int guardMinDamage) {
+        public boolean canAttack(){return weapon.damage()>0&&(offhand==null||!offhand.handUsage().equals("off_two"));}
+    }
     private Item item(String code){
         if(code==null)return null;
         return db.query("select code,name,description,kind,hand_usage,passive_armor,guard_reduction,guard_min_damage,grants_attack from item_definitions where code=?",
