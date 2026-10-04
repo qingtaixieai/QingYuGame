@@ -33,6 +33,7 @@ public class BattleService {
     private final AccountService accounts;
     private final CharacterService characters;
     private final EquipmentService equipment;
+    private final LootService loot;
     private final tools.jackson.databind.json.JsonMapper json=tools.jackson.databind.json.JsonMapper.builder().build();
     private final Map<UUID,Long> aiNext=new HashMap<>();
     private final long turnMillis;
@@ -44,8 +45,8 @@ public class BattleService {
     private record Encounter(UUID id,String version,int q,int r,int round,UUID turn,int points,boolean attackUsed,long deadline,int nextInitiative,boolean turnStartEdge) {}
     private record Position(UUID id,int q,int r,int initiative,int entryRound) {}
 
-    BattleService(JdbcTemplate db,AccountService accounts,CharacterService characters,EquipmentService equipment,@Value("${game.battle.turn-ms:45000}") long turnMillis){
-        this.db=db;this.accounts=accounts;this.characters=characters;this.equipment=equipment;this.turnMillis=Math.max(5000,turnMillis);
+    BattleService(JdbcTemplate db,AccountService accounts,CharacterService characters,EquipmentService equipment,LootService loot,@Value("${game.battle.turn-ms:45000}") long turnMillis){
+        this.db=db;this.accounts=accounts;this.characters=characters;this.equipment=equipment;this.loot=loot;this.turnMillis=Math.max(5000,turnMillis);
     }
 
     private List<Encounter> encounters(String where,Object... args){
@@ -126,6 +127,7 @@ public class BattleService {
         for(UUID user:participants){characters.cancelTimer(user);db.update("update battle_actors set initiative_roll=?,initiative_score=? where encounter_id=? and account_id=?",rolls.get(user),rolls.get(user)+Math.floorDiv(characters.get(user).agility()-10,2),id,user);}
         db.update("update battle_encounters set next_initiative=?,turn_account_id=? where id=?",participants.size(),participants.getFirst(),id);
         event(id,"start",actor,target,null,null,now);
+        loot.enterBattle(id,version,a.q(),a.r());
         return id;
     }
 
@@ -235,6 +237,17 @@ public class BattleService {
     public void endTurn(UUID actor,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);
         advanceTurn(b,position(b.id(),actor).initiative(),online,now);
+    }
+    public LootService.Context lootContext(UUID actor,String version){
+        Encounter b=forActor(actor);if(b==null)throw bad("战斗已结束，请回到大世界");
+        var p=position(b.id(),actor);return new LootService.Context(actor,version,b.q(),b.r(),b.id(),p.q(),p.r());
+    }
+    public void requireLootAction(UUID actor){requireStanding(actor);if(requireTurn(actor).points()<2)throw bad("需要2行动点");}
+    public void payLootAction(UUID actor,Set<UUID> online,long now){
+        Encounter b=requireTurn(actor);requireLootAction(actor);
+        db.update("update battle_encounters set turn_points=turn_points-2 where id=?",b.id());
+        event(b.id(),"loot",actor,null,null,null,now);
+        if(b.points()==2)advanceTurn(b,position(b.id(),actor).initiative(),online,now);
     }
     private void advanceTurn(Encounter b,int after,Set<UUID> online,long now){
         List<Position> all=positions(b.id());
@@ -355,6 +368,7 @@ public class BattleService {
         return true;
     }
     private void close(UUID id,long now){
+        loot.closeBattle(id);
         db.update("update battle_encounters set active=false where id=?",id);
         db.update("delete from battle_intents where encounter_id=?",id);
         db.update("delete from battle_actors where encounter_id=?",id);

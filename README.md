@@ -33,6 +33,8 @@
 
 当前服务器使用原生Java 21、PostgreSQL 17和systemd运行，未使用Docker：镜像仓库连接受限。程序为`/opt/qingyu/game.jar`，网页为`/opt/qingyu/frontend/`，私密配置为`/opt/qingyu/runtime.env`（权限600）。数据库为`worldgame`，数据目录为`/var/lib/postgresql/17/main`。
 
+发布约定（用户2026年10月5日确认）：本项目已授权修改完成、必要验证通过后，自动备份并部署现有服务器，核对线上状态后推送既有GitHub仓库，无需再次询问发布许可。新代码任务的开工确认仍保留；此约定不适用于其他项目。
+
 - 查看服务：`sudo systemctl status qingyu`；查看日志：`sudo journalctl -u qingyu -n 100`。
 - 后端更新：替换JAR后执行`sudo systemctl restart qingyu`，数据库与世界存档保留。前端更新应先上传assets，最后替换index.html。
 - Nginx实际站点配置为`/www/server/panel/vhost/nginx/qingyu.conf`；修改后先执行`sudo nginx -t`再重载。

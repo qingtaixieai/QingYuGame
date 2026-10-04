@@ -28,7 +28,8 @@ public class WorldService {
     private final ResourceService resources;private final ModerationService moderation;
     private final CharacterService characters;private final EquipmentService equipment;
     private final BattleService battles;private final FerryService ferry;private final HotbarService hotbar;
-    WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment,HotbarService hotbar){this.hotbar=hotbar;this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
+    private final LootService loot;
+    WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment,HotbarService hotbar,LootService loot){this.loot=loot;this.hotbar=hotbar;this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
     @PostConstruct void load(){
         var rows=db.queryForList("select document from worlds where id=1",String.class);
         if(rows.isEmpty()) {world=WorldMap.generate(new SecureRandom().nextLong());db.update("insert into worlds values(1,?)",json.writeValueAsString(world));}
@@ -39,6 +40,7 @@ public class WorldService {
             if(!previous.version().equals(world.version())){
                 db.update("update worlds set document=? where id=1",json.writeValueAsString(world));
                 db.update("update battle_encounters set world_version=? where world_version=?",world.version(),previous.version());
+                db.update("update loot_containers set world_version=? where world_version=?",world.version(),previous.version());
             }
             boolean empty=resources.nodes().isEmpty();resources.initialize(world);
             if(!empty&&!previous.version().equals(world.version()))resources.extend(previous,world);
@@ -59,7 +61,8 @@ public class WorldService {
             (rs,n)->rs.getObject(1,UUID.class)));
         var out=new LinkedHashMap<String,Object>(Map.of("type","state","version",world.version(),"players",players.stream().filter(p->(entered.contains(p.get("id"))||p.get("kind").equals("monster"))).toList(),"tick",tick,"resources",resources.nodes(),"actions",resources.actions(),"serverTime",System.currentTimeMillis(),"emotes",emotes.values().stream().filter(e->e.expiresAt()>System.currentTimeMillis()).toList(),"battles",battles.summaries(world.version()),"battleRevision",battleRevision));boolean soul=viewing!=null&&viewing.life().equals("soul");
         out.put("ferry",soul?null:ferry.state());if(soul){out.put("resources",List.of());out.put("actions",List.of());out.put("emotes",List.of());out.put("battles",List.of());}
-        if(viewing!=null){out.put("character",viewing);out.put("inventory",resources.inventory(viewer));}return out;
+        out.put("loot",soul?List.of():loot.ground(world.version(),System.currentTimeMillis()));
+        if(viewing!=null){out.put("character",viewing);out.put("inventory",resources.inventory(viewer));out.put("carriedCorpses",loot.carried(viewer));}return out;
     }
     public synchronized AccountService.Account register(String name,String pass){var a=accounts.register(name,pass,world.spawn());characters.ensurePlayers();return a;}
     public synchronized List<WorldMap.Hex> move(UUID id,int q,int r,String version){
@@ -126,8 +129,28 @@ public class WorldService {
     public synchronized WorldMap regenerate(UUID actor){
         WorldMap next=WorldMap.expand(WorldMap.generate(new SecureRandom().nextLong()));
         tx.executeWithoutResult(s->{db.update("update worlds set document=? where id=1",json.writeValueAsString(next));
-            db.update("update accounts set q=?,r=?",next.spawn().q(),next.spawn().r());resources.reset(next);battles.reset();ferry.reset(next,System.currentTimeMillis());characters.reset(next,System.currentTimeMillis());audit(actor,"regenerate",next.version());});
+            db.update("update accounts set q=?,r=?",next.spawn().q(),next.spawn().r());resources.reset(next);loot.resetGround();battles.reset();ferry.reset(next,System.currentTimeMillis());characters.reset(next,System.currentTimeMillis());audit(actor,"regenerate",next.version());});
         world=next;battles.world(world);routes.clear();emotes.clear();battleRevision++;broadcast();return world;
+    }
+    private LootService.Context lootContext(UUID id,String version,UUID battleId){
+        if(!world.version().equals(version))throw AccountService.bad("世界已更新，请刷新");
+        if(!Objects.equals(battles.currentId(id),battleId))throw AccountService.bad("战斗状态已变化，请重新打开列表");
+        characters.requireAlive(id);ferry.requireAshore(id);
+        if(routes.containsKey(id))throw AccountService.bad("请停下后操作");
+        if(battleId!=null)return battles.lootContext(id,version);
+        var c=characters.get(id);if(battles.blocked(c.q(),c.r()))throw AccountService.bad("此格已被战斗封锁");
+        return new LootService.Context(id,version,c.q(),c.r(),null,null,null);
+    }
+    public synchronized Object lootList(UUID id,String version,UUID battleId){var c=lootContext(id,version,battleId);return Map.of("ground",loot.nearby(c,System.currentTimeMillis()),"carried",loot.carried(id));}
+    public synchronized Object lootContents(UUID id,UUID container,String version,UUID battleId){var c=lootContext(id,version,battleId);return tx.execute(s->loot.contents(container,c,System.currentTimeMillis()));}
+    public synchronized void lootCommand(UUID id,LootService.Command cmd){
+        var c=lootContext(id,cmd.version(),cmd.battleId());long now=System.currentTimeMillis();
+        tx.executeWithoutResult(s->{
+            if(c.battleId()!=null)battles.requireLootAction(id);
+            loot.execute(c,cmd,now);
+            if(c.battleId()!=null)battles.payLootAction(id,onlineUsers(),now);
+            characters.hostile(id);resources.cancel(id);hotbar.sync(id);
+        });battleRevision++;broadcast();
     }
     public synchronized List<Map<String,Object>> inventory(UUID id){accounts.get(id);return resources.inventory(id);}
     public synchronized Map<String,String> collect(UUID id,int q,int r,String version){
@@ -254,7 +277,9 @@ public class WorldService {
         boolean encounterChanged=Boolean.TRUE.equals(tx.execute(s->monsterEncounters(now)));
         if(encounterChanged)battleRevision++;
         boolean ferryChanged=Boolean.TRUE.equals(tx.execute(s->ferry.advance(now)));
-        boolean resourcesChanged=Boolean.TRUE.equals(tx.execute(s->resources.advance(world,now)));
+        boolean lootChanged=Boolean.TRUE.equals(tx.execute(s->loot.expire(now)));
+        if(lootChanged)battleRevision++;
+        boolean resourcesChanged=Boolean.TRUE.equals(tx.execute(s->resources.advance(world,now)))||lootChanged;
         boolean battlesChanged=Boolean.TRUE.equals(tx.execute(s->battles.advance(onlineUsers(),now)));
         if(battlesChanged){battleRevision++;for(var c:characters.all())if(!c.alive()){routes.remove(c.id());resources.cancel(c.id());}}
         if(tick%60==0){

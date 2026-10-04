@@ -1,4 +1,5 @@
 export type Hex={q:number;r:number};
+export type LootContainer=Hex&{id:string;kind:'corpse'|'bag';name:string;sourceKind:'monster'|'player'|null;sourceId:string|null;version:string;battleId:string|null;battleQ:number|null;battleR:number|null;carrierId:string|null;createdAt:number;expiresAt:number|null;itemCount:number};
 export type Tile=Hex&{terrain:string;road:boolean;place:null|{name:string;type:string;description:string}};
 export type World={version:string;seed:number;name:string;radius:number;spawn:Hex;tiles:Tile[]};
 export type Account=Hex&{id:string;username:string;approved:boolean;admin:boolean;color:string};

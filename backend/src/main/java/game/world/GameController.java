@@ -26,6 +26,9 @@ public class GameController {
     record EquipmentRequest(String code,String mainHand,String offHand) {}
     record GrantRequest(String code,int quantity) {}
     record LifeRequest(String action,UUID targetId) {}
+    @GetMapping("/loot") public Object loot(HttpServletRequest req,@RequestParam String version,@RequestParam(required=false) UUID battleId){return world.lootList(accounts.require(req,true,false).id(),version,battleId);}
+    @GetMapping("/loot/{id}") public Object lootContents(HttpServletRequest req,@PathVariable UUID id,@RequestParam String version,@RequestParam(required=false) UUID battleId){return world.lootContents(accounts.require(req,true,false).id(),id,version,battleId);}
+    @PostMapping("/loot/action") public Object lootAction(HttpServletRequest req,@RequestBody LootService.Command body){world.lootCommand(accounts.require(req,true,false).id(),body);return Map.of("message","操作成功");}
     @GetMapping("/character") public Object character(HttpServletRequest req){return world.character(accounts.require(req,true,false).id());}
     @GetMapping("/items") public Object items(HttpServletRequest req){accounts.require(req,true,false);return world.catalog();}
     @PostMapping("/equipment") public Object equip(@RequestBody EquipmentRequest body,HttpServletRequest req){world.equip(accounts.require(req,true,false).id(),body.mainHand()!=null||body.offHand()!=null?body.mainHand():body.code(),body.offHand());return Map.of("message","装备已更新");}

@@ -1,3 +1,4 @@
+import type {LootContainer} from './types';
 import {bindMapGestures} from './mapGestures';
 import { memo, useEffect, useRef } from 'react';
 import { Application, Container, Graphics, Text } from 'pixi.js';
@@ -39,7 +40,7 @@ function ruin(g:Graphics,x:number,y:number){
   pixel(g,x-12,y+8,10,3,0x7d9b61);pixel(g,x+3,y+5,6,4,0x7d9b61);
 }
 export type MapControls={zoom:(factor:number)=>void;fit:()=>void;locate:(h:Hex)=>void};
-type Props={deathMark:Hex|null;active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
+type Props={loot:LootContainer[];deathMark:Hex|null;active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
 export const MapView=memo(function MapView(props:Props){
   const host=useRef<HTMLDivElement>(null), latest=useRef(props), application=useRef<Application|null>(null);
   latest.current=props;
@@ -55,6 +56,7 @@ export const MapView=memo(function MapView(props:Props){
       const scene=new Container(),ground=new Graphics(),roads=new Graphics(),decor=new Graphics(),markers=new Container(),selection=new Graphics(),routeLine=new Graphics(),actors=new Container();
       app.stage.addChild(scene);const resourceLayer=new Container(),effects=new Container(),battleMarks=new Container();
       scene.addChild(ground,roads,decor,resourceLayer,markers,battleMarks,routeLine,selection,actors,effects);
+      const lootLayer=new Container();scene.addChild(lootLayer);let lootSignature='';
       let battleSignature="",deathSignature="";
       const deathMarker=new Container();scene.addChild(deathMarker);
       const map=props.world,index=new Map(map.tiles.map(t=>[key(t),t]));
@@ -144,6 +146,8 @@ export const MapView=memo(function MapView(props:Props){
           const progress=ferryRouteProgress(ferry,boatRouteIndex,boatRoute.length,now),i=Math.floor(progress),f=progress-i,a=boatRoute[i],b=boatRoute[Math.min(i+1,boatRoute.length-1)];
           boat.position.set(a.x+(b.x-a.x)*f,a.y+(b.y-a.y)*f+Math.sin(now/450)*.8);
         }
+        const lootKey=current.loot.map(x=>x.id+':'+x.q+','+x.r+':'+x.battleId).join('|');
+        if(lootKey!==lootSignature){lootSignature=lootKey;lootLayer.removeChildren().forEach(x=>x.destroy());const groups=new Map<string,{q:number;r:number;corpse:boolean;count:number}>();for(const x of current.loot){const k=key(x),old=groups.get(k);if(old){old.count++;old.corpse||=x.kind==='corpse';}else groups.set(k,{q:x.q,r:x.r,corpse:x.kind==='corpse',count:1});}for(const x of groups.values()){const p=position(x),g=new Graphics();pixel(g,p.x+5,p.y+3,10,8,x.corpse?0x855842:0xb19a69);pixel(g,p.x+7,p.y,6,4,0xd6be86);lootLayer.addChild(g);const t=new Text({text:(x.corpse?'尸体':'小袋子')+(x.count>1?' ×'+x.count:''),style:{fontFamily:'Microsoft YaHei',fontSize:8,fill:0x4a392b,stroke:{color:0xf2e7c7,width:2}}});t.position.set(p.x+1,p.y+12);lootLayer.addChild(t);}}
         const nextBattleSignature=current.battles.map(b=>b.id+":"+b.participants).join("|");
         if(nextBattleSignature!==battleSignature){battleSignature=nextBattleSignature;battleMarks.removeChildren().forEach(c=>c.destroy());
           for(const battle of current.battles){const p=position(battle),mark=new Graphics();hex(mark,p.x,p.y,SIZE-1).fill({color:0xa95042,alpha:.22}).stroke({color:0xb65546,width:2});battleMarks.addChild(mark);

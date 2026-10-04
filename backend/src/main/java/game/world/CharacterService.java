@@ -15,14 +15,14 @@ public class CharacterService {
         public boolean npc(){return !kind.equals("player");}
         public WorldMap.Hex hex(){return new WorldMap.Hex(q,r);}
     }
-    private final JdbcTemplate db;private final EquipmentService equipment;
+    private final JdbcTemplate db;private final EquipmentService equipment;private final LootService loot;
     private final long recallMs,restMs,respawnMs,protectionMs;
     private WorldMap world;
     private List<WorldMap.Hex> roamingCells;
     public static final UUID ISLAND_BEAST=UUID.fromString("a3347a88-6099-42bf-9d66-000000000001");
-    CharacterService(JdbcTemplate db,EquipmentService equipment,@Value("${game.recall-ms:5000}") long recall,
+    CharacterService(JdbcTemplate db,EquipmentService equipment,LootService loot,@Value("${game.recall-ms:5000}") long recall,
         @Value("${game.rest-ms:10000}") long rest,@Value("${game.monster.respawn-ms:60000}") long respawn,
-        @Value("${game.revive-protection-ms:5000}") long protection){this.db=db;this.equipment=equipment;recallMs=recall;restMs=rest;respawnMs=respawn;protectionMs=protection;}
+        @Value("${game.revive-protection-ms:5000}") long protection){this.db=db;this.equipment=equipment;this.loot=loot;recallMs=recall;restMs=rest;respawnMs=respawn;protectionMs=protection;}
     public void initialize(WorldMap world,long now){
         this.world=world;roamingCells=null;ensurePlayers();
         // Timers freeze during downtime; a reconnect never auto-revives a soul.
@@ -61,6 +61,7 @@ public class CharacterService {
     }
     public void die(UUID id,long now){
         var c=get(id);if(c.life.equals("soul")||c.life.equals("dead"))return;
+        loot.createCorpse(c,world.version(),now);
         db.update("update characters set life=?,hp=0,down_hp=0,death_q=?,death_r=?,timer_kind=?,timer_end=?,protected_until=0,saved_at=? where id=?",c.npc()?"dead":"soul",c.q,c.r,c.npc()?"respawn":null,c.npc()?now+respawnMs:0,now,id);
         db.update("delete from world_actions where account_id=?",id);db.update("delete from ferry_passengers where account_id=?",id);
         if(!c.npc())relocate(id,c.bindQ,c.bindR);
