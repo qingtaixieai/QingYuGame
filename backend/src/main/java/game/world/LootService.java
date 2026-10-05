@@ -39,7 +39,7 @@ public class LootService {
         db.update("insert into loot_containers(id,kind,name,source_kind,source_id,world_version,q,r,created_at,expires_at,strength,agility,constitution,intellect,perception,willpower) values(?,'corpse',?,'monster',?,?,?,?,?,?,?,?,?,?,?,?)",id,c.name()+"的尸体",c.id(),version,c.q(),c.r(),now,now+GROUND_LIFETIME,c.strength(),c.agility(),c.constitution(),c.intellect(),c.perception(),c.willpower());
         db.update("update loot_containers c set battle_id=a.encounter_id,battle_q=a.q,battle_r=a.r from battle_actors a join battle_encounters b on b.id=a.encounter_id where c.id=? and a.account_id=? and b.active=true",id,c.id());
         // 生物背包物品随尸体掉落；装备的武器也一并进入尸体供玩家拾取。
-        for(var row:db.queryForList("select item_code,quantity from creature_items where character_id=? and quantity>0",c.id()))
+        for(var row:db.queryForList("select item_code,quantity from inventories where character_id=? and quantity>0",c.id()))
             db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,?) on conflict(container_id,item_code) do update set quantity=loot_items.quantity+excluded.quantity",id,row.get("item_code"),row.get("quantity"));
         String weapon=c.weapon();
         if(weapon!=null&&!weapon.equals("unarmed")&&!weapon.equals("claws"))
@@ -60,7 +60,7 @@ public class LootService {
             var drops=cmd.items()==null?List.<ItemDrop>of():cmd.items();
             if(drops.isEmpty())throw AccountService.bad("请选择要丢弃的物品");
             for(var d:drops){int amount=d.quantity()==null?0:d.quantity();if(amount<1)throw AccountService.bad("请输入有效数量");
-                if(db.update("update inventories set quantity=quantity-? where account_id=? and item_code=? and quantity>=?",amount,c.actor(),d.code(),amount)!=1)throw AccountService.bad("背包物品数量不足");}
+                if(db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",amount,c.actor(),d.code(),amount)!=1)throw AccountService.bad("背包物品数量不足");}
             UUID id=UUID.randomUUID();db.update("insert into loot_containers(id,kind,name,world_version,q,r,created_at,expires_at) values(?,'pile','掉落堆',?,?,?,?,?)",id,c.version(),c.q(),c.r(),now,now+GROUND_LIFETIME);
             for(var d:drops)db.update("insert into loot_items values(?,?,?)",id,d.code(),d.quantity());
             return;
@@ -91,7 +91,7 @@ public class LootService {
         }
     }
     private void transfer(UUID actor,UUID container,String code,long amount,long remaining){
-        db.update("insert into inventories values(?,?,?) on conflict(account_id,item_code) do update set quantity=inventories.quantity+excluded.quantity",actor,code,amount);
+        db.update("insert into inventories values(?,?,?) on conflict(character_id,item_code) do update set quantity=inventories.quantity+excluded.quantity",actor,code,amount);
         if(amount==remaining)db.update("delete from loot_items where container_id=? and item_code=?",container,code);
         else db.update("update loot_items set quantity=quantity-? where container_id=? and item_code=?",amount,container,code);
     }

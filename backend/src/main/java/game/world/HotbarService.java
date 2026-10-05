@@ -27,7 +27,7 @@ public class HotbarService {
         out.add(action("force-withdraw","common","强制撤离","withdraw","force-withdraw","回合开始已在外圈且保留完整6点时立即离场。",6,"action",null));
         if(l.canAttack()){var w=l.weapon();out.add(action("attack:"+w.code(),"weapon",w.name(),"attack","attack",w.damage()+"伤害；预设攻击，范围 "+w.minRange()+"–"+w.maxRange()+"格。",w.cost(),"action",null));}
         if(l.canGuard())out.add(action("guard:"+l.offHand(),"weapon","举盾","guard","guard","将最多2行动点转为反应点；举盾额外减伤"+l.guardReduction()+"。",1,"reaction",null));
-        long bandages=db.queryForObject("select coalesce((select quantity from inventories where account_id=? and item_code='bandage'),0)",Long.class,id);
+        long bandages=db.queryForObject("select coalesce((select quantity from inventories where character_id=? and item_code='bandage'),0)",Long.class,id);
         if(bandages>0)out.add(action("bandage","item","绷带","bandage","bandage","消耗1绷带，治疗自己或相邻站立角色4生命。",2,"action",bandages));
         return out;
     }

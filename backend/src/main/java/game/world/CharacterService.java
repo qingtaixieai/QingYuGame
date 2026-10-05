@@ -38,20 +38,14 @@ public class CharacterService {
     public List<Character> all(){return db.query(PROFILE_SQL,PROFILE);}
     public Character get(UUID id){return db.query(PROFILE_SQL+" where c.id=?",PROFILE,id).stream().findFirst().orElseThrow(()->AccountService.bad("角色不存在"));}
     public WeaponRules.Weapon weapon(UUID id){var c=get(id);var w=equipment.loadout(id).weapon();return c.npc()&&w.code().equals("unarmed")?WeaponRules.CLAWS:w;}
-    /** 生物（NPC）装备与背包：重生时刷新——装备斧子，背包 0-3 石头、0-3 木头、0-2 绷带。 */
+    /** 生物（NPC）装备与背包：重生时刷新——装备斧子，背包 0-3 石头、0-3 木头、0-2 绷带。用与玩家同一套背包。 */
     public void kit(UUID id){
-        db.update("delete from creature_items where character_id=?",id);
+        db.update("delete from inventories where character_id=?",id);
         db.update("update characters set weapon='axe',offhand=null where id=?",id);
         var rnd=new java.security.SecureRandom();
-        giveCreature(id,"stone",rnd.nextInt(4));giveCreature(id,"wood",rnd.nextInt(4));giveCreature(id,"bandage",rnd.nextInt(3));
+        give(id,"stone",rnd.nextInt(4));give(id,"wood",rnd.nextInt(4));give(id,"bandage",rnd.nextInt(3));
     }
-    public void giveCreature(UUID id,String code,int quantity){
-        if(quantity<=0)return;
-        db.update("insert into creature_items(character_id,item_code,quantity) values(?,?,?) on conflict(character_id,item_code) do update set quantity=creature_items.quantity+excluded.quantity",id,code,quantity);
-    }
-    public List<Map<String,Object>> creatureItems(UUID id){return db.queryForList("select item_code,quantity from creature_items where character_id=? and quantity>0",id);}
-    public boolean hasCreatureItem(UUID id,String code){return Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from creature_items where character_id=? and item_code=? and quantity>0)",Boolean.class,id,code));}
-    public void consumeCreatureItem(UUID id,String code,int quantity){if(db.update("update creature_items set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",quantity,id,code,quantity)==0)throw AccountService.bad("生物没有该物品");}
+    private void give(UUID id,String code,int quantity){if(quantity<=0)return;equipment.give(id,code,quantity);}
     public EquipmentService.Loadout loadout(UUID id){return equipment.loadout(id);}
     public void requireAlive(UUID id){if(!get(id).alive())throw AccountService.bad("倒地或灵魂状态不能执行此行动");}
     public void relocate(UUID id,int q,int r){var c=get(id);if(c.npc())db.update("update characters set q=?,r=? where id=?",q,r,id);else db.update("update accounts set q=?,r=? where id=?",q,r,id);}

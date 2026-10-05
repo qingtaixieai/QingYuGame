@@ -41,7 +41,7 @@ try{
  assert.equal(originalPassengers.length,0,'Run local ferry test while no real passengers are aboard');
  ferryMutated=true;await db.query("update ferry_state set wood=0,stone=0,built=false,phase='mainland',route_index=0,next_at=0 where id=1");
  let ferry=(await call('/players',undefined,a)).data.ferry;
- for(const u of users)await db.query('insert into inventories values($1,\'wood\',20),($1,\'stone\',20) on conflict(account_id,item_code) do update set quantity=20',[u.data.id]);
+ for(const u of users)await db.query('insert into inventories values($1,\'wood\',20),($1,\'stone\',20) on conflict(character_id,item_code) do update set quantity=20',[u.data.id]);
  await call('/ferry/contribute',{version,item:'wood',quantity:1},a,400);
  for(const u of users)await db.query('update accounts set q=$1,r=$2 where id=$3',[ferry.mainlandPort.q,ferry.mainlandPort.r,u.data.id]);
  await call('/ferry/contribute',{version,item:'wood',quantity:0},a,400);

@@ -54,7 +54,7 @@ public class EquipmentService {
         Map<String,Integer> need=new HashMap<>();
         if(main!=null&&!main.equals(oldMain)&&!main.equals(oldOff))need.merge(main,1,Integer::sum);
         if(off!=null&&!off.equals(oldMain)&&!off.equals(oldOff))need.merge(off,1,Integer::sum);
-        for(var e:need.entrySet())if(db.update("update inventories set quantity=quantity-? where account_id=? and item_code=? and quantity>=?",e.getValue(),id,e.getKey(),e.getValue())==0)throw AccountService.bad("背包中缺少需要装备的物品");
+        for(var e:need.entrySet())if(db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",e.getValue(),id,e.getKey(),e.getValue())==0)throw AccountService.bad("背包中缺少需要装备的物品");
         if(oldMain!=null&&!oldMain.equals(main)&&!oldMain.equals(off))give(id,oldMain,1);
         if(oldOff!=null&&!oldOff.equals(main)&&!oldOff.equals(off))give(id,oldOff,1);
         db.update("update characters set weapon=?,offhand=? where id=?",main,off,id);
@@ -64,9 +64,10 @@ public class EquipmentService {
         if(quantity<1||quantity>100)throw AccountService.bad("数量须在1至100之间");
         if(item(code)==null)throw AccountService.bad("物品不存在");
         if(Set.of("unarmed","claws").contains(code))throw AccountService.bad("请选择可发放的物品");
-        db.update("insert into inventories(account_id,item_code,quantity) values(?,?,?) on conflict(account_id,item_code) do update set quantity=inventories.quantity+excluded.quantity",id,code,quantity);
+        db.update("insert into inventories(character_id,item_code,quantity) values(?,?,?) on conflict(character_id,item_code) do update set quantity=inventories.quantity+excluded.quantity",id,code,quantity);
     }
     public void consume(UUID id,String code,int quantity){
-        if(db.update("update inventories set quantity=quantity-? where account_id=? and item_code=? and quantity>=?",quantity,id,code,quantity)==0)throw AccountService.bad("背包中没有可用物品");
+        if(db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",quantity,id,code,quantity)==0)throw AccountService.bad("背包中没有可用物品");
     }
+    public boolean has(UUID id,String code){return Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from inventories where character_id=? and item_code=? and quantity>0)",Boolean.class,id,code));}
 }

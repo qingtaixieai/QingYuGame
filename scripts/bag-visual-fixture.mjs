@@ -14,7 +14,7 @@ try{
   await db.query('delete from battle_intents where encounter_id=$1',[fixture.battle]);
   await db.query('update battle_encounters set turn_account_id=$1,turn_points=6,turn_deadline=$2 where id=$3',[a,Date.now()+3600000,fixture.battle]);
   await db.query("update characters set weapon='axe',offhand='buckler' where id=$1",[a]);
-  for(const code of ['axe','spear','flail','buckler','tower_shield','bandage'])await db.query('insert into inventories(account_id,item_code,quantity) values($1,$2,$3) on conflict(account_id,item_code) do update set quantity=excluded.quantity',[a,code,code==='bandage'?3:1]);
+  for(const code of ['axe','spear','flail','buckler','tower_shield','bandage'])await db.query('insert into inventories(character_id,item_code,quantity) values($1,$2,$3) on conflict(character_id,item_code) do update set quantity=excluded.quantity',[a,code,code==='bandage'?3:1]);
   const cells=[[0,0],[1,0],[0,1]];
   for(let i=0;i<fixture.users.length;i++){
    await db.query("update characters set life='alive',hp=$1,protected_until=0 where id=$2",[i===2?20:10,fixture.users[i].data.id]);

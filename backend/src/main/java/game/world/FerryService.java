@@ -43,10 +43,10 @@ public class FerryService {
         if(s.built)throw AccountService.bad("公共小船已经建成");
         if(!Set.of("wood","stone").contains(Objects.requireNonNullElse(item,""))||quantity<1||quantity>100000)throw AccountService.bad("请选择木头或石头，以及有效数量");
         int remaining=item.equals("wood")?woodNeeded-s.wood:stoneNeeded-s.stone;
-        Long inventory=db.queryForObject("select coalesce((select quantity from inventories where account_id=? and item_code=?),0)",Long.class,id,item);
+        Long inventory=db.queryForObject("select coalesce((select quantity from inventories where character_id=? and item_code=?),0)",Long.class,id,item);
         int amount=(int)Math.min(Math.min(quantity,remaining),inventory);
         if(amount<=0)throw AccountService.bad(remaining<=0?"这类材料已经足够":"背包里没有这种材料");
-        db.update("update inventories set quantity=quantity-? where account_id=? and item_code=?",amount,id,item);
+        db.update("update inventories set quantity=quantity-? where character_id=? and item_code=?",amount,id,item);
         int wood=s.wood+(item.equals("wood")?amount:0),stone=s.stone+(item.equals("stone")?amount:0);
         boolean built=wood>=woodNeeded&&stone>=stoneNeeded;
         db.update("update ferry_state set wood=?,stone=?,built=?,next_at=?,saved_at=? where id=1",wood,stone,built,built?now+dwellMs:0,now);

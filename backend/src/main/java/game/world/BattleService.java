@@ -98,7 +98,7 @@ public class BattleService {
         List<String> out=new ArrayList<>();
         if(c.alive()){out.add("move");if(l.canAttack())out.add("attack");out.add("endTurn");}
         if(l.canGuard())out.add("guard");
-        if(c.kind().equals("player")){if(Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from inventories where account_id=? and item_code='bandage' and quantity>0)",Boolean.class,c.id())))out.add("bandage");out.add("rescue");}
+        if(c.kind().equals("player")){if(Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from inventories where character_id=? and item_code='bandage' and quantity>0)",Boolean.class,c.id())))out.add("bandage");out.add("rescue");}
         out.add("withdraw");return out;
     }
 
@@ -420,7 +420,7 @@ public class BattleService {
         var options=new ArrayList<MonsterBrain.Option>();
         Intent pending=intents(b.id()).stream().filter(i->i.attackerId().equals(own.id())).findFirst().orElse(null);
         for(var t:targets){var h=new WorldMap.Hex(t.q(),t.r());if(distance(own.q(),own.r(),t.q(),t.r())==1&&b.points()>=2&&(pending==null||!pending.cells().contains(h)))options.add(new MonsterBrain.Option("attack",h,8+(characters.get(t.id()).hp()<=3?4:0)));}
-        if(b.points()>=2){var self=characters.get(own.id());if(self.hp()<self.maxHp()&&characters.hasCreatureItem(own.id(),"bandage"))options.add(new MonsterBrain.Option("heal",from,self.hp()*2<=self.maxHp()?14:6));}
+        if(b.points()>=2){var self=characters.get(own.id());if(self.hp()<self.maxHp()&&equipment.has(own.id(),"bandage"))options.add(new MonsterBrain.Option("heal",from,self.hp()*2<=self.maxHp()?14:6));}
         if(b.points()>0)for(var next:from.neighbors())if(within(next.q(),next.r())&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
             double score=0;int nearest=targets.stream().mapToInt(p->distance(next.q(),next.r(),p.q(),p.r())).min().orElse(20),before=targets.stream().mapToInt(p->distance(from.q(),from.r(),p.q(),p.r())).min().orElse(20);
             score+=(before-nearest)*2-0.4;
@@ -440,7 +440,7 @@ public class BattleService {
         Encounter b=requireTurn(actor);Position a=position(b.id(),actor);
         if(a==null||b.points()<2)return;
         var self=characters.get(actor);if(!self.alive()||self.hp()>=self.maxHp())return;
-        characters.consumeCreatureItem(actor,"bandage",1);
+        equipment.consume(actor,"bandage",1);
         characters.heal(actor,4);
         db.update("update battle_encounters set turn_points=turn_points-2 where id=?",b.id());
         event(b.id(),"bandage",actor,actor,a.q(),a.r(),now);
