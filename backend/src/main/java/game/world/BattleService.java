@@ -29,6 +29,8 @@ public class BattleService {
         return result;
     }
     public boolean blocked(int q,int r){return at(world.version(),q,r)!=null;}
+    /** 与 (q,r) 相邻的进行中战斗 id（用于生物增援），没有则 null。 */
+    public UUID adjacentEncounter(int q,int r){for(var d:DIRECTIONS){var e=at(world.version(),q+d.q(),r+d.r());if(e!=null)return e.id();}return null;}
     private final JdbcTemplate db;
     private final AccountService accounts;
     private final CharacterService characters;
@@ -136,13 +138,17 @@ public class BattleService {
         Encounter b=byId(id);
         if(b==null)throw bad("战斗已结束");
         characters.requireAlive(actor);characters.hostile(actor);
-        var a=accounts.get(actor);
-        if(!a.approved()||distance(a.q(),a.r(),b.q(),b.r())!=1)throw bad("请先到达战斗格旁边，再选择参战");
         if(forActor(actor)!=null)throw bad("你已经在战斗中");
-        if(db.queryForObject("select count(*) from accounts where id=? and entered=true",Integer.class,actor)==0)throw bad("请先进入世界");
-        int direction=direction(a.q()-b.q(),a.r()-b.r());
+        var c=characters.get(actor);
+        if(distance(c.q(),c.r(),b.q(),b.r())!=1)throw bad(c.npc()?"生物需到达相邻格才能增援":"请先到达战斗格旁边，再选择参战");
+        if(!c.npc()){
+            var a=accounts.get(actor);
+            if(!a.approved())throw bad("请先到达战斗格旁边，再选择参战");
+            if(db.queryForObject("select count(*) from accounts where id=? and entered=true",Integer.class,actor)==0)throw bad("请先进入世界");
+        }
+        int direction=direction(c.q()-b.q(),c.r()-b.r());
         enter(actor,b,direction,now);
-        db.update("update accounts set q=?,r=? where id=?",b.q(),b.r(),actor);
+        characters.relocate(actor,b.q(),b.r());
         return id;
     }
     public void rejoinAtCell(UUID actor,long now){
@@ -414,6 +420,7 @@ public class BattleService {
         var options=new ArrayList<MonsterBrain.Option>();
         Intent pending=intents(b.id()).stream().filter(i->i.attackerId().equals(own.id())).findFirst().orElse(null);
         for(var t:targets){var h=new WorldMap.Hex(t.q(),t.r());if(distance(own.q(),own.r(),t.q(),t.r())==1&&b.points()>=2&&(pending==null||!pending.cells().contains(h)))options.add(new MonsterBrain.Option("attack",h,8+(characters.get(t.id()).hp()<=3?4:0)));}
+        if(b.points()>=2){var self=characters.get(own.id());if(self.hp()<self.maxHp()&&characters.hasCreatureItem(own.id(),"bandage"))options.add(new MonsterBrain.Option("heal",from,self.hp()*2<=self.maxHp()?14:6));}
         if(b.points()>0)for(var next:from.neighbors())if(within(next.q(),next.r())&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
             double score=0;int nearest=targets.stream().mapToInt(p->distance(next.q(),next.r(),p.q(),p.r())).min().orElse(20),before=targets.stream().mapToInt(p->distance(from.q(),from.r(),p.q(),p.r())).min().orElse(20);
             score+=(before-nearest)*2-0.4;
@@ -425,7 +432,19 @@ public class BattleService {
         var choice=MonsterBrain.choose(options);
         if(choice==null)endTurn(own.id(),online,now);
         else if(choice.action().equals("attack"))attackCell(own.id(),choice.cell().q(),choice.cell().r(),online,now);
+        else if(choice.action().equals("heal"))healSelf(own.id(),online,now);
         else step(own.id(),choice.cell().q(),choice.cell().r(),online,now);
+    }
+    /** 生物用背包里的绷带治疗自己（与玩家绷带一致：花 2 点，回 4 血）。 */
+    private void healSelf(UUID actor,Set<UUID> online,long now){
+        Encounter b=requireTurn(actor);Position a=position(b.id(),actor);
+        if(a==null||b.points()<2)return;
+        var self=characters.get(actor);if(!self.alive()||self.hp()>=self.maxHp())return;
+        characters.consumeCreatureItem(actor,"bandage",1);
+        characters.heal(actor,4);
+        db.update("update battle_encounters set turn_points=turn_points-2 where id=?",b.id());
+        event(b.id(),"bandage",actor,actor,a.q(),a.r(),now);
+        if(b.points()<=2)advanceTurn(b,a.initiative(),online,now);
     }
     public boolean resume(UUID actor,long now){
         Encounter b=forActor(actor);

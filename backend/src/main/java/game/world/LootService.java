@@ -38,7 +38,12 @@ public class LootService {
         UUID id=UUID.randomUUID();
         db.update("insert into loot_containers(id,kind,name,source_kind,source_id,world_version,q,r,created_at,expires_at,strength,agility,constitution,intellect,perception,willpower) values(?,'corpse',?,'monster',?,?,?,?,?,?,?,?,?,?,?,?)",id,c.name()+"的尸体",c.id(),version,c.q(),c.r(),now,now+GROUND_LIFETIME,c.strength(),c.agility(),c.constitution(),c.intellect(),c.perception(),c.willpower());
         db.update("update loot_containers c set battle_id=a.encounter_id,battle_q=a.q,battle_r=a.r from battle_actors a join battle_encounters b on b.id=a.encounter_id where c.id=? and a.account_id=? and b.active=true",id,c.id());
-        // No invented loot table. Future creature inventories can populate loot_items in this transaction.
+        // 生物背包物品随尸体掉落；装备的武器也一并进入尸体供玩家拾取。
+        for(var row:db.queryForList("select item_code,quantity from creature_items where character_id=? and quantity>0",c.id()))
+            db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,?) on conflict(container_id,item_code) do update set quantity=loot_items.quantity+excluded.quantity",id,row.get("item_code"),row.get("quantity"));
+        String weapon=c.weapon();
+        if(weapon!=null&&!weapon.equals("unarmed")&&!weapon.equals("claws"))
+            db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,1) on conflict(container_id,item_code) do update set quantity=loot_items.quantity+1",id,weapon);
     }
     public void enterBattle(UUID battle,String version,int q,int r){
         var old=query("where carrier_id is null and battle_id is null and world_version=? and q=? and r=?",version,q,r);

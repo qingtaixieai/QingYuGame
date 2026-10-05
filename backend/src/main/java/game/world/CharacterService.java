@@ -29,14 +29,29 @@ public class CharacterService {
         db.update("update characters set timer_end=?+greatest(0,timer_end-saved_at) where timer_end>0 and saved_at>0",now);
         db.update("update characters set protected_until=?+greatest(0,protected_until-saved_at) where protected_until>saved_at and saved_at>0",now);
         db.update("update characters set saved_at=?",now);
-        var area=roamingArea();if(!area.isEmpty()){var h=area.getFirst();db.update("insert into characters(id,kind,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster','远屿山魈',?,?,12,12,6,6,?,?,?) on conflict(id) do nothing",ISLAND_BEAST,h.q(),h.r(),h.q(),h.r(),now);}
+        var area=roamingArea();if(!area.isEmpty()){var h=area.getFirst();db.update("insert into characters(id,kind,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster','远屿山魈',?,?,12,12,6,6,?,?,?) on conflict(id) do nothing",ISLAND_BEAST,h.q(),h.r(),h.q(),h.r(),now);
+            if(db.queryForObject("select weapon is null from characters where id=?",Boolean.class,ISLAND_BEAST))kit(ISLAND_BEAST);}
     }
     public void ensurePlayers(){db.update("insert into characters(id,account_id,bind_q,bind_r) select id,id,?,? from accounts on conflict(id) do nothing",world.spawn().q(),world.spawn().r());}
     private static final String PROFILE_SQL="select c.*,coalesce(a.username,c.name) as display_name,coalesce(a.q,c.q) as world_q,coalesce(a.r,c.r) as world_r from characters c left join accounts a on a.id=c.account_id";
     private static final org.springframework.jdbc.core.RowMapper<Character> PROFILE=(r,n)->new Character(r.getObject("id",UUID.class),r.getString("kind"),r.getString("display_name"),r.getInt("world_q"),r.getInt("world_r"),r.getInt("hp"),r.getInt("max_hp"),r.getInt("down_hp"),r.getInt("max_down_hp"),r.getString("life"),r.getInt("strength"),r.getInt("agility"),r.getInt("constitution"),r.getInt("intellect"),r.getInt("perception"),r.getInt("willpower"),r.getString("weapon"),r.getString("offhand"),r.getInt("bind_q"),r.getInt("bind_r"),(Integer)r.getObject("death_q"),(Integer)r.getObject("death_r"),r.getString("timer_kind"),r.getLong("timer_end"),r.getLong("protected_until"));
     public List<Character> all(){return db.query(PROFILE_SQL,PROFILE);}
     public Character get(UUID id){return db.query(PROFILE_SQL+" where c.id=?",PROFILE,id).stream().findFirst().orElseThrow(()->AccountService.bad("角色不存在"));}
-    public WeaponRules.Weapon weapon(UUID id){var c=get(id);return c.npc()?WeaponRules.CLAWS:equipment.loadout(id).weapon();}
+    public WeaponRules.Weapon weapon(UUID id){var c=get(id);var w=equipment.loadout(id).weapon();return c.npc()&&w.code().equals("unarmed")?WeaponRules.CLAWS:w;}
+    /** 生物（NPC）装备与背包：重生时刷新——装备斧子，背包 0-3 石头、0-3 木头、0-2 绷带。 */
+    public void kit(UUID id){
+        db.update("delete from creature_items where character_id=?",id);
+        db.update("update characters set weapon='axe',offhand=null where id=?",id);
+        var rnd=new java.security.SecureRandom();
+        giveCreature(id,"stone",rnd.nextInt(4));giveCreature(id,"wood",rnd.nextInt(4));giveCreature(id,"bandage",rnd.nextInt(3));
+    }
+    public void giveCreature(UUID id,String code,int quantity){
+        if(quantity<=0)return;
+        db.update("insert into creature_items(character_id,item_code,quantity) values(?,?,?) on conflict(character_id,item_code) do update set quantity=creature_items.quantity+excluded.quantity",id,code,quantity);
+    }
+    public List<Map<String,Object>> creatureItems(UUID id){return db.queryForList("select item_code,quantity from creature_items where character_id=? and quantity>0",id);}
+    public boolean hasCreatureItem(UUID id,String code){return Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from creature_items where character_id=? and item_code=? and quantity>0)",Boolean.class,id,code));}
+    public void consumeCreatureItem(UUID id,String code,int quantity){if(db.update("update creature_items set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",quantity,id,code,quantity)==0)throw AccountService.bad("生物没有该物品");}
     public EquipmentService.Loadout loadout(UUID id){return equipment.loadout(id);}
     public void requireAlive(UUID id){if(!get(id).alive())throw AccountService.bad("倒地或灵魂状态不能执行此行动");}
     public void relocate(UUID id,int q,int r){var c=get(id);if(c.npc())db.update("update characters set q=?,r=? where id=?",q,r,id);else db.update("update accounts set q=?,r=? where id=?",q,r,id);}
@@ -97,7 +112,7 @@ public class CharacterService {
     public boolean wander(long now,Set<UUID> engaged){
         var area=roamingArea();if(area.isEmpty())return false;boolean changed=false;
         for(var c:all())if(c.npc()&&!engaged.contains(c.id)){
-            if(c.life.equals("dead")&&c.timerEnd<=now){var occupied=new HashSet<>(all().stream().filter(x->!x.id.equals(c.id)&&!x.life.equals("soul")&&!x.life.equals("dead")).map(Character::hex).toList());var free=new ArrayList<>(area.stream().filter(h->!occupied.contains(h)).toList());if(free.isEmpty())continue;Collections.shuffle(free);var h=free.getFirst();relocate(c.id,h.q(),h.r());revive(c.id,now);db.update("update characters set protected_until=0 where id=?",c.id);changed=true;}
+            if(c.life.equals("dead")&&c.timerEnd<=now){var occupied=new HashSet<>(all().stream().filter(x->!x.id.equals(c.id)&&!x.life.equals("soul")&&!x.life.equals("dead")).map(Character::hex).toList());var free=new ArrayList<>(area.stream().filter(h->!occupied.contains(h)).toList());if(free.isEmpty())continue;Collections.shuffle(free);var h=free.getFirst();relocate(c.id,h.q(),h.r());revive(c.id,now);kit(c.id);db.update("update characters set protected_until=0 where id=?",c.id);changed=true;}
             else if(c.alive()&&db.queryForObject("select next_move from characters where id=?",Long.class,c.id)<=now){var options=new ArrayList<>(c.hex().neighbors().stream().filter(area::contains).toList());if(!options.isEmpty()){Collections.shuffle(options);var h=options.getFirst();relocate(c.id,h.q(),h.r());changed=true;}db.update("update characters set next_move=? where id=?",now+4000,c.id);}
         }return changed;
     }

@@ -302,7 +302,9 @@ public class WorldService {
         Set<UUID> entered=new HashSet<>(db.query("select id from accounts where entered=true and approved=true",(r,n)->r.getObject(1,UUID.class)));
         for(var monster:characters.all())if(monster.npc()&&monster.alive()&&!battles.engaged(monster.id())&&!battles.blocked(monster.q(),monster.r())){
             var target=characters.all().stream().filter(c->!c.npc()&&entered.contains(c.id())&&(c.alive()||c.life().equals("down"))&&c.protectedUntil()<=now&&c.hex().equals(monster.hex())&&!battles.engaged(c.id())&&!ferry.aboard(c.id())).findFirst();
-            if(target.isPresent()){battles.start(monster.id(),target.get().id(),world.version(),world,now);changed=true;}
+            if(target.isPresent()){battles.start(monster.id(),target.get().id(),world.version(),world,now);changed=true;continue;}
+            var adjacent=battles.adjacentEncounter(monster.q(),monster.r());
+            if(adjacent!=null){try{battles.join(monster.id(),adjacent,world.version(),world,now);changed=true;}catch(Exception ignored){}}
         }
         if(changed)battles.actorIds().forEach(id->{routes.remove(id);resources.cancel(id);characters.cancelTimer(id);});return changed;
     }
