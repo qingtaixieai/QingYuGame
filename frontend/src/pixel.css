@@ -1,0 +1,50 @@
+/* 像素风按钮：硬阴影（0 模糊）+ 按下位移，参考 pxlkit 的 retro button 技法。
+   用于地图/人物页等"行动类"按钮，与柔和的侧栏按钮区分开。 */
+
+.pixel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  background: #eef0e7;
+  color: #3d5a45;
+  border: 2px solid #7c8a6b;
+  border-radius: 3px;
+  padding: 9px 14px;
+  font-weight: 500;
+  font-size: 12px;
+  box-shadow: 3px 3px 0 0 #7c8a6b;
+  transition: transform .05s ease, box-shadow .05s ease;
+}
+.pixel-btn:hover:not(:disabled) {
+  transform: translate(1px, 1px);
+  box-shadow: 2px 2px 0 0 #7c8a6b;
+}
+.pixel-btn:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 0 #7c8a6b;
+}
+.pixel-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  border-color: #c9cfbc;
+  box-shadow: 3px 3px 0 0 #c9cfbc;
+}
+.pixel-btn--primary {
+  background: #345c49;
+  color: #fffcef;
+  border-color: #244835;
+  box-shadow: 3px 3px 0 0 #244835;
+}
+.pixel-btn--primary:hover:not(:disabled) { box-shadow: 2px 2px 0 0 #244835; }
+.pixel-btn--primary:active:not(:disabled) { box-shadow: 0 0 0 0 #244835; }
+.pixel-btn--primary:disabled { border-color: #a9b3a0; box-shadow: 3px 3px 0 0 #a9b3a0; }
+.pixel-btn--danger {
+  background: #fff3ea;
+  color: #ad5a45;
+  border-color: #c98a72;
+  box-shadow: 3px 3px 0 0 #c98a72;
+}
+.pixel-btn--danger:hover:not(:disabled) { box-shadow: 2px 2px 0 0 #c98a72; }
+.pixel-btn--danger:active:not(:disabled) { box-shadow: 0 0 0 0 #c98a72; }
+.pixel-btn--block { width: 100%; }

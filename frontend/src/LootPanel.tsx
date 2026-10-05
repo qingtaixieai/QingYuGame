@@ -1,38 +1,31 @@
 import {useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Backpack,Package,Skull,X} from 'lucide-react';
+import {Package,Skull,X} from 'lucide-react';
 import {api} from './api';
-import {ItemIcon} from './CharacterPanel';
-import type {BattleState,Hex,Item,LootContainer} from './types';
+import type {BattleState,LootContainer} from './types';
+import './pixel.css';
 import './loot.css';
 
-export function LootGlyph({kind}:{kind:string}){return kind==='corpse'?<Skull size={22}/>:kind==='chest'?<Package size={22}/>:<Package size={22}/>}
-export function remaining(expires:number|null,clock:number){if(expires===null)return '携带中 · 计时暂停';const s=Math.max(0,Math.ceil((expires-clock)/1000));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} 后消失`;}
-const attributes=[['strength','力量'],['agility','敏捷'],['constitution','体魄'],['intellect','智识'],['perception','感知'],['willpower','意志']] as const;
-export function LootPanel({version,battle,me,clock,revision,items,connected,position,initialTab='ground',initialId,onClose,onChanged}:{version:string;battle:BattleState;me:string;clock:number;revision:number;items:Item[];connected:boolean;position:Hex;initialTab?:'ground'|'bag';initialId?:string;onClose:()=>void;onChanged:()=>Promise<void>}){
- const [tab,setTab]=useState(initialTab),[filter,setFilter]=useState('all'),[search,setSearch]=useState('');
- const [ground,setGround]=useState<LootContainer[]>([]),[carried,setCarried]=useState<LootContainer[]>([]),[selection,setSelection]=useState(initialId||''),[contents,setContents]=useState<Item[]>([]),[itemCode,setItemCode]=useState('');
- const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState(''),[quantity,setQuantity]=useState(1),[localRevision,setLocalRevision]=useState(0);
- const pending=useRef(false),contentRequest=useRef(0),panel=useRef<HTMLElement>(null);
- const battleId=battle.active?battle.id:null,own=battle.active?battle.actors.find(a=>a.accountId===me):null;
+const kindName=(k:string)=>k==='corpse'?'尸体':k==='chest'?'宝箱':'掉落堆';
+function Glyph({kind,size=24}:{kind:string;size?:number}){return kind==='corpse'?<Skull size={size}/>:<Package size={size}/>;}
+function remaining(expires:number|null,clock:number){if(expires===null)return '携带中 · 计时暂停';const s=Math.max(0,Math.ceil((expires-clock)/1000));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} 后消失`;}
+
+/** 地面遗留物列表：只列出当前格有哪些容器，点开进各自的独立页。 */
+export function LootPanel({version,battle,me,clock,revision,onOpenContainer,onClose}:{version:string;battle:BattleState;me:string;clock:number;revision:number;onOpenContainer:(id:string)=>void;onClose:()=>void}){
+ const [ground,setGround]=useState<LootContainer[]>([]);
+ const [loading,setLoading]=useState(true),[error,setError]=useState('');
+ const panel=useRef<HTMLElement>(null);
+ const battleId=battle.active?battle.id:null;
  const query=`?version=${encodeURIComponent(version)}${battleId?'&battleId='+battleId:''}`;
- const selected=[...ground,...carried].find(x=>x.id===selection);
- const sameCell=!!selected&&(selected.carrierId===me||(!battle.active?selected.q===position.q&&selected.r===position.r:selected.battleQ===own?.q&&selected.battleR===own?.r));
- const available=connected&&(!battle.active||battle.turnAccountId===me&&own?.character.life==='alive'&&battle.turnPoints>=2);
- const expired=selected?.expiresAt!=null&&selected.expiresAt<=clock;
- const selectedItem=contents.find(i=>i.code===itemCode)||contents[0];
- const canTake=available&&sameCell&&!expired&&!busy&&!loading;
- const cost=battle.active?' · 2点':'';
- useEffect(()=>{panel.current?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!pending.current){e.stopPropagation();onClose();}};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[]);
- useEffect(()=>{let alive=true;api<{ground:LootContainer[];carried:LootContainer[]}>('/loot'+query).then(d=>{if(!alive)return;setGround(d.ground);setCarried(d.carried);}).catch(e=>{if(alive){setError(e.message);setGround([]);setCarried([]);}});return()=>{alive=false;};},[query,revision,localRevision,position.q,position.r,own?.q,own?.r]);
- useEffect(()=>{const request=++contentRequest.current;setContents([]);setLoading(true);setQuantity(1);if(!selected||!sameCell||expired){setLoading(false);return;}api<Item[]>('/loot/'+selected.id+query).then(d=>{if(request===contentRequest.current){setContents(d);setItemCode(old=>d.some(x=>x.code===old)?old:d[0]?.code||'');}}).catch(e=>{if(request===contentRequest.current)setError(e.message);}).finally(()=>{if(request===contentRequest.current)setLoading(false);});return()=>{contentRequest.current++;};},[selection,sameCell,expired,query,revision,localRevision]);
- async function act(action:string,code?:string,amount?:number){if(pending.current)return;pending.current=true;setBusy(true);setError('');setNotice('');try{await api('/loot/action',{action,containerId:selected?.id,code,quantity:amount,version,battleId});setNotice(action==='carry'?'尸体与内部物品已装入背包':action==='dropCorpse'?'尸体已放回地上，重新计时30分钟':'物品已放入背包');setLocalRevision(n=>n+1);await onChanged();}catch(e){setError((e as Error).message);setLocalRevision(n=>n+1);}finally{pending.current=false;setBusy(false);}}
- const list=(tab==='ground'?ground:carried).filter(x=>(filter==='all'||filter===x.kind)&&x.name.includes(search));
- const kindName=(k:string)=>k==='corpse'?'尸体':k==='chest'?'宝箱':'掉落堆';
- return createPortal(<div className="loot-overlay" onClick={e=>e.stopPropagation()}><section ref={panel} tabIndex={-1} className="loot-panel" role="dialog" aria-modal="true" aria-label="遗留物"><header><div><h2>{tab==='ground'?'此处遗留':'携带的尸体'}</h2><small>{battle.active?`战斗中 · ${battle.turnPoints} 行动点 · 同格查看免费`:'同一世界格 · 尸体与掉落堆'}</small></div><button aria-label="关闭遗留物" disabled={busy} onClick={onClose}><X/></button></header>
- <div className="loot-columns"><aside><nav><button className={tab==='ground'?'active':''} onClick={()=>{setTab('ground');setSelection('');}}>地上</button><button className={tab==='bag'?'active':''} onClick={()=>{setTab('bag');setSelection('');}}>携带的尸体</button></nav><div className="loot-filters">{[['all','全部'],['corpse','尸体'],['chest','宝箱'],['pile','掉落堆']].map(([v,n])=><button className={filter===v?'active':''} key={v} onClick={()=>setFilter(v)}>{n}</button>)}</div><input aria-label="搜索遗留物" value={search} onChange={e=>setSearch(e.target.value)} placeholder="查找名称…"/><div className="loot-source-list">
- {list.map(x=><button key={x.id} className={'loot-source '+(selection===x.id?'selected':'')} onClick={()=>{setSelection(x.id);setError('');}}><LootGlyph kind={x.kind}/><span><strong>{x.name}</strong><small>{kindName(x.kind)} · {x.itemCount} 件内容</small><small>{remaining(x.expiresAt,clock)}{x.battleId?` · 格 ${x.battleQ},${x.battleR}`:''}</small></span></button>)}
- {!list.length&&<p>这里没有遗留物。</p>}</div><footer>{tab==='ground'?`${ground.length} 个来源`:`${carried.length} 具尸体 · 各占一格`}</footer></aside>
- <article><div className="loot-detail-scroll">{selected?<><div className="loot-title"><LootGlyph kind={selected.kind}/><div><h3>{selected.name}</h3><small>{kindName(selected.kind)}{selected.carrierId?' · 背包中':` · 地上 ${selected.q},${selected.r}`} · {remaining(selected.expiresAt,clock)}</small>{selected.kind==='corpse'&&<em className="loot-searched">{selected.itemCount>0?'未搜刮':'已搜刮'}</em>}</div></div><p>{selected.kind==='corpse'?'每具尸体独立存放，内部物品随尸体一起携带。':selected.kind==='chest'?'宝箱内的物品，点开查看。':'丢弃的物品留在此处，任何旅人都可拾取。'}</p>{selected.kind==='corpse'&&<div className="loot-attributes">{attributes.map(([key,name])=><div key={key}><span>{name}</span><strong>{selected[key]}</strong></div>)}</div>}{!sameCell?<p className="loot-warning">必须站在此来源所在格，才能打开和拿取。</p>:expired?<p>已到期消失，正在更新列表。</p>:loading?<p>正在查看物品…</p>:<><div className="loot-grid">{contents.map(i=><button key={i.code} title={i.description} aria-label={`查看${i.name}`} className={selectedItem?.code===i.code?'selected':''} onClick={()=>{setItemCode(i.code);setQuantity(1);}}><ItemIcon code={i.code}/><span>{i.name}</span><b>{i.quantity}</b></button>)}</div>{selectedItem?<div className="loot-description"><strong>{selectedItem.name}</strong><p>{selectedItem.description}</p><label>拿取数量 <input aria-label="拿取数量" type="number" min="1" max={selectedItem.quantity} value={quantity} onChange={e=>setQuantity(Number(e.target.value))}/></label></div>:<p>已搜空{selected.kind==='corpse'&&!selected.carrierId?'，仍可拿走整具尸体。':'。'}</p>}</>}</>:<div className="loot-empty"><Backpack size={40}/><h3>选择一个来源</h3><p>尸体各自保留背包，不会合并堆叠。</p></div>}</div>
- <div className="loot-feedback" aria-live="polite">{error||notice||(!available&&battle.active?'等待自己的回合并保留至少2行动点':'')}</div><div className="loot-controls">{selected&&<><button disabled={!canTake||!selectedItem||!Number.isInteger(quantity)||quantity<1||quantity>(selectedItem?.quantity||0)} onClick={()=>void act('take',selectedItem?.code,quantity)}>拿取所选{cost}</button><button disabled={!canTake||!contents.length} onClick={()=>void act('takeAll')}>全部拿取{cost}</button>{selected.kind==='corpse'&&(selected.carrierId?<button disabled={!connected||busy||battle.active} onClick={()=>void act('dropCorpse')}>丢下尸体 · 重置30分钟</button>:<button className="loot-primary" disabled={!canTake} onClick={()=>void act('carry')}>拿走尸体（含物品）{cost}</button>)}</>}</div></article></div><footer className="loot-footnote">地上30分钟后消失 · 尸体携带期间暂停 · 重新丢下重置30分钟</footer></section></div>,document.body);
+ useEffect(()=>{panel.current?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape'){e.stopPropagation();onClose();}};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[]);
+ useEffect(()=>{let alive=true;setLoading(true);api<{ground:LootContainer[]}>('/loot'+query).then(d=>{if(alive){setGround(d.ground);setError('');}}).catch(e=>{if(alive)setError(e.message);}).finally(()=>{if(alive)setLoading(false);});return()=>{alive=false;};},[query,revision]);
+ return createPortal(<div className="container-overlay" onClick={e=>e.stopPropagation()}><section ref={panel} tabIndex={-1} className="loot-list" role="dialog" aria-modal="true" aria-label="此处遗留物">
+  <header className="loot-list-head"><div><h2>此处遗留</h2><small>{battle.active?`战斗中 · ${battle.turnPoints} 行动点 · 同格查看免费`:'点开查看各自的内容'}</small></div><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={18}/></button></header>
+  <div className="loot-list-body">
+   {loading&&<p className="container-note">正在读取…</p>}
+   {!loading&&!ground.length&&!error&&<p className="container-note">这里没有遗留物。</p>}
+   {ground.map(x=><button key={x.id} className="loot-card" onClick={()=>onOpenContainer(x.id)}><Glyph kind={x.kind}/><span><strong>{x.name}</strong><small>{kindName(x.kind)} · {x.itemCount} 件内容</small><small>{remaining(x.expiresAt,clock)}{x.battleId?` · 格 ${x.battleQ},${x.battleR}`:''}</small></span></button>)}
+   {error&&<p className="container-note warn">{error}</p>}
+  </div>
+ </section></div>,document.body);
 }

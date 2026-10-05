@@ -4,7 +4,7 @@ import type {Character,Item,LootContainer} from './types';
 import './character.css';
 export function ItemIcon({code}:{code:string}){return code==='wood'?<TreePine/>:code==='stone'?<Mountain/>:code==='axe'?<Axe/>:code==='buckler'||code==='tower_shield'?<Shield/>:code==='bandage'?<Hand/>:code==='spear'?<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 21L17 7M14 7L21 2 20 10Z"/></svg>:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 22l7-9m0 0l3-3m0 0l2-2M15 3l1 2m5-1l-1 2m3 5l-3-1"/><circle cx="17" cy="8" r="4"/></svg>;}
 const attributes=[['strength','力量'],['agility','敏捷'],['constitution','体魄'],['intellect','智识'],['perception','感知'],['willpower','意志']] as const;
-export function CharacterPanel({corpses,onLoot,onDrop,character,items,locked,onEquip}:{corpses:LootContainer[];onLoot:(id?:string)=>void;onDrop:()=>void;character:Character|null;items:Item[];locked:boolean;onEquip:(main:string|null,off?:string|null)=>Promise<void>}){
+export function CharacterPanel({corpses,onLoot,onDrop,character,items,locked,onEquip}:{corpses:LootContainer[];onLoot:(id:string)=>void;onDrop:()=>void;character:Character|null;items:Item[];locked:boolean;onEquip:(main:string|null,off?:string|null)=>Promise<void>}){
  const [selected,setSelected]=useState<string|null>(null),[busy,setBusy]=useState(false);
  const detailRef=useRef<HTMLElement|null>(null);
  useEffect(()=>{if(selected)detailRef.current?.scrollIntoView({block:'nearest'});},[selected]);
@@ -18,7 +18,7 @@ export function CharacterPanel({corpses,onLoot,onDrop,character,items,locked,onE
  </section><section className="character-vitals"><div className="vitals-line">生命 {character.hp}/{character.maxHp}<meter min={0} max={character.maxHp} value={character.hp}/></div><div className="vitals-line">倒地 {character.downHp}/{character.maxDownHp}<meter min={0} max={character.maxDownHp} value={character.downHp}/></div>{character.life==='down'&&<small>无法行动，等待其他旅人救起。</small>}</section>
  <div className="attribute-grid">{attributes.map(([key,name])=><div key={key} title={`${name}基础值。${key==='agility'?'影响开战先攻判定。':'后续开放成长与派生效果。'}`}><span>{name}</span><strong>{character[key]}</strong></div>)}</div>
  <div className="equipment-row"><p>{equipped?`${equipped.name} · ${equipped.damage} 伤害 · ${equipped.attack_cost} 行动点`:'空手 · 2 伤害 · 2 行动点'}{offhand?`；${offhand.name} · 护甲+${offhand.passive_armor}`:''}</p>{(equipped||offhand)&&<button disabled={locked||busy} onClick={()=>void onEquip(null,null)}>全部收起</button>}</div>
- <button disabled={character.life!=='alive'} onClick={onDrop}>丢弃物品</button>
+ <button className="pixel-btn" disabled={character.life!=='alive'} onClick={onDrop}>丢弃物品</button>
  <h3>背包</h3><div className="inventory-grid">{items.filter(i=>i.quantity>0).map(i=><button key={i.code} className={'item-slot '+(selected===i.code?'selected':'')} aria-label={`${i.name}，数量${i.quantity}`} onClick={()=>setSelected(i.code)} title={`${i.name}：${i.description}${i.kind==='weapon'?` · ${i.damage}伤害 / ${i.attack_cost}行动点`:''}`}><ItemIcon code={i.code}/><span>{i.name}</span><b>{i.quantity}</b></button>)}</div>
  <div className="inventory-grid">{corpses.map(c=><button key={c.id} className="item-slot corpse-slot" disabled={character.life!=='alive'} onClick={()=>onLoot(c.id)} title="独立占格，不可堆叠；携带期间暂停消失计时"><Skull/><span>{c.name}</span></button>)}</div>
  {!corpses.length&&!items.some(i=>i.quantity>0)&&<p className="empty">背包还是空的，去收集些材料吧。</p>}

@@ -1,0 +1,42 @@
+/* 容器独立页（尸体/宝箱/掉落堆）——复用人物页的米白纸感 + 六维格子 + 物品网格 */
+
+.container-overlay{position:fixed;inset:0;z-index:190;display:grid;place-items:center;background:#1a241e55;padding:18px}
+.container-page{width:min(720px,100%);max-height:min(680px,94dvh);display:flex;flex-direction:column;background:#faf6e8;color:#304d42;border:1px solid #bac8ab;border-radius:12px;box-shadow:0 20px 70px #425a4522;outline:none}
+.container-head{display:flex;align-items:center;gap:14px;padding:16px 20px;border-bottom:1px solid #cdd4bd66}
+.container-glyph{width:46px;height:46px;flex:none;display:grid;place-items:center;border-radius:8px;border:1px solid #b6aa7588;background:#f2f1df;color:#6b7d5f}
+.container-title{flex:1;min-width:0}
+.container-title h2{margin:0;font-size:18px;font-weight:600;color:#304d42}
+.container-title small{display:block;margin-top:3px;font-size:11px;color:#718278}
+.container-badge{font-size:11px;padding:2px 9px;border-radius:20px;border:1px solid #b5c2a0;background:#eef1dd;color:#5a6f5f;white-space:nowrap}
+.container-badge.done{background:#e2e6d8;color:#7c887a}
+.container-head .icon-button{flex:none;padding:6px;background:transparent;border:0;color:#7d897d;border-radius:6px}
+.container-head .icon-button:hover{background:#eef0e7}
+.container-body{display:grid;grid-template-columns:170px minmax(0,1fr);gap:18px;padding:18px 20px;min-height:0;overflow:auto}
+.container-portrait{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px 10px;border-radius:10px;border:1px solid #cdd4bd;background:linear-gradient(160deg,#f4edce,#e2e8cf);color:#5a6f5f;align-self:start}
+.container-portrait span{font-size:12px;color:#718278}
+.container-detail{min-width:0}
+.container-note{margin:6px 0;font-size:13px;color:#718278}
+.container-note.warn{padding:12px;border:1px solid #c9b98a;border-radius:8px;background:#f6efdb;color:#8a6f3c}
+.container-attrs{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.container-attrs>div{border:1px solid #cdd4bd;border-radius:6px;padding:8px;display:flex;justify-content:space-between;background:#f2f1df}
+.container-attrs span{font-size:12px;color:#617765}
+.container-attrs strong{color:#3d5a45}
+.container-subtitle{font-size:14px;margin:18px 0 10px;color:#3d5a45}
+.container-subtitle em{font-style:normal;font-size:11px;color:#8a947e;margin-left:6px}
+.container-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(74px,1fr));gap:8px}
+.container-slot{aspect-ratio:1;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;border:1px solid #b5c2a0;border-radius:7px;background:#f2f1df;color:#3d5a45;cursor:pointer}
+.container-slot:hover{background:#eef0e1}
+.container-slot.selected{border-color:#548779;background:#e6eeda}
+.container-slot span{font-size:10px}
+.container-slot b{position:absolute;right:5px;bottom:3px;font-size:11px;color:#548779}
+.container-empty{grid-column:1/-1;margin:6px 0;font-size:12px;color:#8a947e}
+.container-item-detail{margin-top:14px;border:1px solid #cdd4bd;border-radius:8px;background:#fff9e8;padding:12px;font-size:12px}
+.container-item-detail strong{color:#3d5a45}
+.container-item-detail p{margin:6px 0;color:#718278}
+.container-item-detail label{display:flex;align-items:center;gap:8px}
+.container-item-detail input{width:72px;padding:5px;border:1px solid #aab99b;border-radius:4px;background:#fff;color:#304d42}
+.container-foot{display:flex;align-items:center;gap:12px;padding:12px 20px;border-top:1px solid #cdd4bd66}
+.container-feedback{flex:1;min-width:0;font-size:12px;color:#a06a3a}
+.container-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:560px){.container-body{grid-template-columns:1fr}.container-portrait{padding:16px}}
+@media(max-height:600px) and (orientation:landscape){.container-page{max-height:calc(100dvh - 12px)}.container-head{padding:10px 14px}.container-body{padding:10px 14px;grid-template-columns:120px minmax(0,1fr)}.container-portrait{padding:14px}.container-foot{padding:8px 14px}}
