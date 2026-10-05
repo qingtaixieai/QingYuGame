@@ -25,6 +25,7 @@ public class GameController {
     record BattleWithdraw(UUID battleId,Integer direction,boolean force) {}
     record EquipmentRequest(String code,String mainHand,String offHand) {}
     record GrantRequest(String code,int quantity) {}
+    record DeployCreature(String species,Integer q,Integer r) {}
     record LifeRequest(String action,UUID targetId) {}
     @GetMapping("/loot") public Object loot(HttpServletRequest req,@RequestParam String version,@RequestParam(required=false) UUID battleId){return world.lootList(accounts.require(req,true,false).id(),version,battleId);}
     @GetMapping("/loot/{id}") public Object lootContents(HttpServletRequest req,@PathVariable UUID id,@RequestParam String version,@RequestParam(required=false) UUID battleId){return world.lootContents(accounts.require(req,true,false).id(),id,version,battleId);}
@@ -34,6 +35,7 @@ public class GameController {
     @PostMapping("/equipment") public Object equip(@RequestBody EquipmentRequest body,HttpServletRequest req){world.equip(accounts.require(req,true,false).id(),body.mainHand()!=null||body.offHand()!=null?body.mainHand():body.code(),body.offHand());return Map.of("message","装备已更新");}
     @PostMapping("/character/action") public Object life(@RequestBody LifeRequest body,HttpServletRequest req){world.lifeAction(accounts.require(req,true,false).id(),body.action(),body.targetId());return Map.of("message","行动已处理");}
     @PostMapping("/admin/accounts/{id}/items") public Object grant(@PathVariable UUID id,@RequestBody GrantRequest body,HttpServletRequest req){world.grant(accounts.require(req,true,true).id(),id,body.code(),body.quantity());return Map.of("message","物品已发放");}
+    @PostMapping("/admin/creatures/deploy") public Map<String,String> deployCreature(@RequestBody DeployCreature body,HttpServletRequest req){if(body.q()==null||body.r()==null)throw AccountService.bad("请填写投放坐标");world.deploy(accounts.require(req,true,true).id(),body.species(),body.q(),body.r());return Map.of("message","已投放");}
     @GetMapping("/health") public Map<String,String> health(){return Map.of("status","ok");}
     @PostMapping("/register") public Map<String,String> register(@RequestBody Credentials c,HttpServletRequest req){moderation.requireGame(null,ModerationService.ip(req.getRemoteAddr()));world.register(c.username,c.password);return Map.of("message","注册成功，请登录查看审批状态");}
     @PostMapping("/login") public AccountService.Account login(@RequestBody Credentials c,HttpServletRequest req,HttpServletResponse res){return world.login(c.username,c.password,req,res);}

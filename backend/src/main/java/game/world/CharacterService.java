@@ -8,42 +8,58 @@ import java.util.*;
 /** Shared player/creature lifecycle. All writes run in the world's transaction/monitor. */
 @Service
 public class CharacterService {
-    public record Character(UUID id,String kind,String name,int q,int r,int hp,int maxHp,int downHp,int maxDownHp,String life,
+    public record Character(UUID id,String kind,String species,String name,int q,int r,int hp,int maxHp,int downHp,int maxDownHp,String life,
         int strength,int agility,int constitution,int intellect,int perception,int willpower,String weapon,String offhand,
-        int bindQ,int bindR,Integer deathQ,Integer deathR,String timerKind,long timerEnd,long protectedUntil) {
+        int bindQ,int bindR,Integer deathQ,Integer deathR,String timerKind,long timerEnd,long protectedUntil,
+        boolean deployed) {
         public boolean alive(){return life.equals("alive");}
         public boolean npc(){return !kind.equals("player");}
+        /** 恶霸：红身、使斧、以老家为圆心游荡。其余生物（利爪怪）走爪子、按登录点那片游荡。 */
+        public boolean bully(){return "bully".equals(species);}
         public WorldMap.Hex hex(){return new WorldMap.Hex(q,r);}
     }
     private final JdbcTemplate db;private final EquipmentService equipment;private final LootService loot;
     private final long recallMs,restMs,respawnMs,protectionMs;
     private WorldMap world;
-    private List<WorldMap.Hex> roamingCells;
+    private final Map<WorldMap.Hex,List<WorldMap.Hex>> roamCache=new HashMap<>();
     public static final UUID ISLAND_BEAST=UUID.fromString("a3347a88-6099-42bf-9d66-000000000001");
     CharacterService(JdbcTemplate db,EquipmentService equipment,LootService loot,@Value("${game.recall-ms:5000}") long recall,
         @Value("${game.rest-ms:10000}") long rest,@Value("${game.monster.respawn-ms:60000}") long respawn,
         @Value("${game.revive-protection-ms:5000}") long protection){this.db=db;this.equipment=equipment;this.loot=loot;recallMs=recall;restMs=rest;respawnMs=respawn;protectionMs=protection;}
     public void initialize(WorldMap world,long now){
-        this.world=world;roamingCells=null;ensurePlayers();
+        this.world=world;roamCache.clear();ensurePlayers();
         // Timers freeze during downtime; a reconnect never auto-revives a soul.
         db.update("update characters set timer_end=?+greatest(0,timer_end-saved_at) where timer_end>0 and saved_at>0",now);
         db.update("update characters set protected_until=?+greatest(0,protected_until-saved_at) where protected_until>saved_at and saved_at>0",now);
         db.update("update characters set saved_at=?",now);
-        var area=roamingArea();if(!area.isEmpty()){var h=area.getFirst();db.update("insert into characters(id,kind,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster','远屿山魈',?,?,12,12,6,6,?,?,?) on conflict(id) do nothing",ISLAND_BEAST,h.q(),h.r(),h.q(),h.r(),now);
+        var area=roamingArea();if(!area.isEmpty()){var h=area.getFirst();db.update("insert into characters(id,kind,species,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster','bully','恶霸',?,?,12,12,6,6,?,?,?) on conflict(id) do nothing",ISLAND_BEAST,h.q(),h.r(),h.q(),h.r(),now);
             if(db.queryForObject("select weapon is null from characters where id=?",Boolean.class,ISLAND_BEAST))kit(ISLAND_BEAST);}
     }
     public void ensurePlayers(){db.update("insert into characters(id,account_id,bind_q,bind_r) select id,id,?,? from accounts on conflict(id) do nothing",world.spawn().q(),world.spawn().r());}
     private static final String PROFILE_SQL="select c.*,coalesce(a.username,c.name) as display_name,coalesce(a.q,c.q) as world_q,coalesce(a.r,c.r) as world_r from characters c left join accounts a on a.id=c.account_id";
-    private static final org.springframework.jdbc.core.RowMapper<Character> PROFILE=(r,n)->new Character(r.getObject("id",UUID.class),r.getString("kind"),r.getString("display_name"),r.getInt("world_q"),r.getInt("world_r"),r.getInt("hp"),r.getInt("max_hp"),r.getInt("down_hp"),r.getInt("max_down_hp"),r.getString("life"),r.getInt("strength"),r.getInt("agility"),r.getInt("constitution"),r.getInt("intellect"),r.getInt("perception"),r.getInt("willpower"),r.getString("weapon"),r.getString("offhand"),r.getInt("bind_q"),r.getInt("bind_r"),(Integer)r.getObject("death_q"),(Integer)r.getObject("death_r"),r.getString("timer_kind"),r.getLong("timer_end"),r.getLong("protected_until"));
+    private static final org.springframework.jdbc.core.RowMapper<Character> PROFILE=(r,n)->new Character(r.getObject("id",UUID.class),r.getString("kind"),r.getString("species"),r.getString("display_name"),r.getInt("world_q"),r.getInt("world_r"),r.getInt("hp"),r.getInt("max_hp"),r.getInt("down_hp"),r.getInt("max_down_hp"),r.getString("life"),r.getInt("strength"),r.getInt("agility"),r.getInt("constitution"),r.getInt("intellect"),r.getInt("perception"),r.getInt("willpower"),r.getString("weapon"),r.getString("offhand"),r.getInt("bind_q"),r.getInt("bind_r"),(Integer)r.getObject("death_q"),(Integer)r.getObject("death_r"),r.getString("timer_kind"),r.getLong("timer_end"),r.getLong("protected_until"),r.getBoolean("deployed"));
     public List<Character> all(){return db.query(PROFILE_SQL,PROFILE);}
     public Character get(UUID id){return db.query(PROFILE_SQL+" where c.id=?",PROFILE,id).stream().findFirst().orElseThrow(()->AccountService.bad("角色不存在"));}
     public WeaponRules.Weapon weapon(UUID id){var c=get(id);var w=equipment.loadout(id).weapon();return c.npc()&&w.code().equals("unarmed")?WeaponRules.CLAWS:w;}
-    /** 生物（NPC）装备与背包：重生时刷新——装备斧子，背包 0-3 石头、0-3 木头、0-2 绷带。用与玩家同一套背包。 */
+    /** 生物（NPC）装备与背包：出生/重生时刷新。恶霸使斧、背包各 1-4 石木；利爪怪用爪（weapon 置空走 fallback）、各 0-3 石木；绷带均 0-2。与玩家共用同一套背包。 */
     public void kit(UUID id){
+        var c=get(id);
         db.update("delete from inventories where character_id=?",id);
-        db.update("update characters set weapon='axe',offhand=null where id=?",id);
         var rnd=new java.security.SecureRandom();
-        give(id,"stone",rnd.nextInt(4));give(id,"wood",rnd.nextInt(4));give(id,"bandage",rnd.nextInt(3));
+        if(c.bully()){
+            db.update("update characters set weapon='axe',offhand=null where id=?",id);
+            give(id,"stone",1+rnd.nextInt(4));give(id,"wood",1+rnd.nextInt(4));
+        }else{
+            db.update("update characters set weapon=null,offhand=null where id=?",id);
+            give(id,"stone",rnd.nextInt(4));give(id,"wood",rnd.nextInt(4));
+        }
+        give(id,"bandage",rnd.nextInt(3));
+    }
+    /** 管理员在固定地点投放一只生物。species：'bully' 恶霸 / 'claw' 利爪怪。投放的怪记为 deployed，死后不重生。 */
+    public Character deploy(String species,int q,int r,long now){
+        UUID id=UUID.randomUUID();String name=species.equals("bully")?"恶霸":"利爪怪";
+        db.update("insert into characters(id,kind,species,deployed,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster',?,true,?,?,?,12,12,6,6,?,?,?)",id,species,name,q,r,q,r,now);
+        kit(id);return get(id);
     }
     private void give(UUID id,String code,int quantity){if(quantity<=0)return;equipment.give(id,code,quantity);}
     public EquipmentService.Loadout loadout(UUID id){return equipment.loadout(id);}
@@ -96,17 +112,26 @@ public class CharacterService {
         }
         db.update("update characters set saved_at=? where timer_end>0 or protected_until>?",now,now);return changed;
     }
-    public List<WorldMap.Hex> roamingArea(){
-        if(roamingCells!=null)return roamingCells;
-        var dock=world.place("landing");if(dock==null)return List.of();var start=dock.hex();
-        var index=world.index();Set<WorldMap.Hex> seen=new HashSet<>();ArrayDeque<WorldMap.Hex> queue=new ArrayDeque<>();queue.add(start);seen.add(start);
-        while(!queue.isEmpty()){var h=queue.remove();for(var n:h.neighbors())if(!seen.contains(n)&&index.containsKey(n)&&index.get(n).walkable()){seen.add(n);queue.add(n);}}
-        roamingCells=seen.stream().filter(h->WeaponRules.distance(h,start)>1&&WeaponRules.distance(h,start)<=6&&index.get(h).place()==null).sorted(Comparator.comparingInt(WorldMap.Hex::q).thenComparingInt(WorldMap.Hex::r)).toList();return roamingCells;
+    /** 以某点为圆心、2~6 格内、可通行、无地标的格子。世界生成后固定，缓存复用。 */
+    private List<WorldMap.Hex> areaAround(WorldMap.Hex start){
+        return roamCache.computeIfAbsent(start,center->{
+            var index=world.index();
+            if(!index.containsKey(center)||!index.get(center).walkable())return List.of();
+            Set<WorldMap.Hex> seen=new HashSet<>();ArrayDeque<WorldMap.Hex> queue=new ArrayDeque<>();queue.add(center);seen.add(center);
+            while(!queue.isEmpty()){var h=queue.remove();for(var n:h.neighbors())if(!seen.contains(n)&&index.containsKey(n)&&index.get(n).walkable()){seen.add(n);queue.add(n);}}
+            return seen.stream().filter(h->WeaponRules.distance(h,center)>1&&WeaponRules.distance(h,center)<=6&&index.get(h).place()==null).sorted(Comparator.comparingInt(WorldMap.Hex::q).thenComparingInt(WorldMap.Hex::r)).toList();
+        });
     }
+    /** 利爪怪游荡区：沿用登录点（landing）周边那片。 */
+    public List<WorldMap.Hex> roamingArea(){var dock=world.place("landing");return dock==null?List.of():areaAround(dock.hex());}
+    /** 恶霸游荡区：以老家（投放/出生点，即 bind 点）为圆心。 */
+    private List<WorldMap.Hex> homeArea(Character c){return areaAround(new WorldMap.Hex(c.bindQ,c.bindR));}
     public boolean wander(long now,Set<UUID> engaged){
-        var area=roamingArea();if(area.isEmpty())return false;boolean changed=false;
-        for(var c:all())if(c.npc()&&!engaged.contains(c.id)){
-            if(c.life.equals("dead")&&c.timerEnd<=now){var occupied=new HashSet<>(all().stream().filter(x->!x.id.equals(c.id)&&!x.life.equals("soul")&&!x.life.equals("dead")).map(Character::hex).toList());var free=new ArrayList<>(area.stream().filter(h->!occupied.contains(h)).toList());if(free.isEmpty())continue;Collections.shuffle(free);var h=free.getFirst();relocate(c.id,h.q(),h.r());revive(c.id,now);kit(c.id);db.update("update characters set protected_until=0 where id=?",c.id);changed=true;}
+        boolean changed=false;
+        for(var c:all())if(c.npc()&&!engaged.contains(c.id)){var area=c.bully()?homeArea(c):roamingArea();if(area.isEmpty())continue;
+            if(c.life.equals("dead")&&c.timerEnd<=now){
+                if(c.deployed)continue; // 管理员投放的怪不重生，只留尸体
+                var occupied=new HashSet<>(all().stream().filter(x->!x.id.equals(c.id)&&!x.life.equals("soul")&&!x.life.equals("dead")).map(Character::hex).toList());var free=new ArrayList<>(area.stream().filter(h->!occupied.contains(h)).toList());if(free.isEmpty())continue;Collections.shuffle(free);var h=free.getFirst();relocate(c.id,h.q(),h.r());revive(c.id,now);kit(c.id);db.update("update characters set protected_until=0 where id=?",c.id);changed=true;}
             else if(c.alive()&&db.queryForObject("select next_move from characters where id=?",Long.class,c.id)<=now){var options=new ArrayList<>(c.hex().neighbors().stream().filter(area::contains).toList());if(!options.isEmpty()){Collections.shuffle(options);var h=options.getFirst();relocate(c.id,h.q(),h.r());changed=true;}db.update("update characters set next_move=? where id=?",now+4000,c.id);}
         }return changed;
     }

@@ -54,7 +54,7 @@ public class WorldService {
         Set<UUID> battling=battles.actorIds();
         var profiles=characters.all();var viewing=viewer==null?null:characters.get(viewer);
         var players=profiles.stream().filter(c->!c.life().equals("dead")&&(viewing!=null&&viewing.life().equals("soul")?c.id().equals(viewer):!c.life().equals("soul"))).map(c->{
-            Map<String,Object> p=new LinkedHashMap<>();p.put("id",c.id());p.put("username",c.name());p.put("q",c.q());p.put("r",c.r());p.put("color",c.npc()?"#a56850":accounts.get(c.id()).color());p.put("online",c.npc()||online.contains(c.id()));p.put("moving",routes.containsKey(c.id()));p.put("inBattle",battling.contains(c.id()));p.put("kind",c.kind());p.put("life",c.life());p.put("hp",c.hp());p.put("maxHp",c.maxHp());return p;
+            Map<String,Object> p=new LinkedHashMap<>();p.put("id",c.id());p.put("username",c.name());p.put("q",c.q());p.put("r",c.r());p.put("color",c.npc()?("claw".equals(c.species())?"#6c7a48":"#b0524a"):accounts.get(c.id()).color());p.put("species",c.species());p.put("online",c.npc()||online.contains(c.id()));p.put("moving",routes.containsKey(c.id()));p.put("inBattle",battling.contains(c.id()));p.put("kind",c.kind());p.put("life",c.life());p.put("hp",c.hp());p.put("maxHp",c.maxHp());return p;
         }).toList();
         // Pending accounts have never entered the world and must not appear on the map.
         Set<UUID> entered=new HashSet<>(db.query("select id from accounts where entered=true",
@@ -313,6 +313,8 @@ public class WorldService {
     public synchronized void equip(UUID id,String code){equip(id,code,null);}
     public synchronized void equip(UUID id,String main,String off){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中请使用战斗栏换装");tx.executeWithoutResult(s->{equipment.equip(id,main,off);hotbar.sync(id);});broadcast();}
     public synchronized void grant(UUID admin,UUID target,String code,int quantity){accounts.get(target);tx.executeWithoutResult(s->{equipment.give(target,code,quantity);hotbar.sync(target);audit(admin,"grant-item",target+":"+code+":"+quantity);});battleRevision++;broadcast();}
+    /** 管理员在固定地点投放一只生物（恶霸/利爪怪）。坐标无效或已被占用则拒绝；投放的怪会自己游荡、被打死后不重生。 */
+    public synchronized void deploy(UUID admin,String species,int q,int r){if(!"bully".equals(species)&&!"claw".equals(species))throw AccountService.bad("未知的生物种类");var tile=world.index().get(new WorldMap.Hex(q,r));if(tile==null)throw AccountService.bad("这个位置在世界之外");if(!tile.walkable())throw AccountService.bad("这里不可通行，无法投放");boolean occupied=characters.all().stream().anyMatch(c->!c.life().equals("soul")&&!c.life().equals("dead")&&c.q()==q&&c.r()==r);if(occupied)throw AccountService.bad("这里已有角色，请另选一格");tx.executeWithoutResult(s->{characters.deploy(species,q,r,System.currentTimeMillis());audit(admin,"deploy-creature",species+"@"+q+","+r);});battleRevision++;broadcast();}
     public synchronized void lifeAction(UUID id,String action,UUID target){
         if(action==null)throw AccountService.bad("请选择行动");
         long now=System.currentTimeMillis();
