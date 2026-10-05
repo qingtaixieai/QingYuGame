@@ -21,7 +21,7 @@ public class CharacterService {
     private final JdbcTemplate db;private final EquipmentService equipment;private final LootService loot;
     private final long recallMs,restMs,respawnMs,protectionMs;
     private WorldMap world;
-    private final Map<WorldMap.Hex,List<WorldMap.Hex>> roamCache=new HashMap<>();
+    private final Map<String,List<WorldMap.Hex>> roamCache=new HashMap<>();
     public static final UUID ISLAND_BEAST=UUID.fromString("a3347a88-6099-42bf-9d66-000000000001");
     CharacterService(JdbcTemplate db,EquipmentService equipment,LootService loot,@Value("${game.recall-ms:5000}") long recall,
         @Value("${game.rest-ms:10000}") long rest,@Value("${game.monster.respawn-ms:60000}") long respawn,
@@ -112,23 +112,23 @@ public class CharacterService {
         }
         db.update("update characters set saved_at=? where timer_end>0 or protected_until>?",now,now);return changed;
     }
-    /** 以某点为圆心、2~6 格内、可通行、无地标的格子。世界生成后固定，缓存复用。 */
-    private List<WorldMap.Hex> areaAround(WorldMap.Hex start){
-        return roamCache.computeIfAbsent(start,center->{
+    /** 以某点为圆心、minDist~6 格内、可通行、无地标的格子。世界生成后固定，缓存复用。 */
+    private List<WorldMap.Hex> areaAround(WorldMap.Hex start,int minDist){
+        return roamCache.computeIfAbsent(start.q()+","+start.r()+":"+minDist,key->{
             var index=world.index();
-            if(!index.containsKey(center)||!index.get(center).walkable())return List.of();
-            Set<WorldMap.Hex> seen=new HashSet<>();ArrayDeque<WorldMap.Hex> queue=new ArrayDeque<>();queue.add(center);seen.add(center);
+            if(!index.containsKey(start)||!index.get(start).walkable())return List.of();
+            Set<WorldMap.Hex> seen=new HashSet<>();ArrayDeque<WorldMap.Hex> queue=new ArrayDeque<>();queue.add(start);seen.add(start);
             while(!queue.isEmpty()){var h=queue.remove();for(var n:h.neighbors())if(!seen.contains(n)&&index.containsKey(n)&&index.get(n).walkable()){seen.add(n);queue.add(n);}}
-            return seen.stream().filter(h->WeaponRules.distance(h,center)>1&&WeaponRules.distance(h,center)<=6&&index.get(h).place()==null).sorted(Comparator.comparingInt(WorldMap.Hex::q).thenComparingInt(WorldMap.Hex::r)).toList();
+            return seen.stream().filter(h->WeaponRules.distance(h,start)>=minDist&&WeaponRules.distance(h,start)<=6&&index.get(h).place()==null).sorted(Comparator.comparingInt(WorldMap.Hex::q).thenComparingInt(WorldMap.Hex::r)).toList();
         });
     }
-    /** 利爪怪游荡区：沿用登录点（landing）周边那片。 */
-    public List<WorldMap.Hex> roamingArea(){var dock=world.place("landing");return dock==null?List.of():areaAround(dock.hex());}
-    /** 恶霸游荡区：以老家（投放/出生点，即 bind 点）为圆心。 */
-    private List<WorldMap.Hex> homeArea(Character c){return areaAround(new WorldMap.Hex(c.bindQ,c.bindR));}
+    /** 自动那只的出生点：登录点（landing）周边 2~6 格那片（避开紧贴码头的格子）。 */
+    public List<WorldMap.Hex> roamingArea(){var dock=world.place("landing");return dock==null?List.of():areaAround(dock.hex(),2);}
+    /** 所有生物的游荡区：以老家（投放/出生点，即 bind 点）为圆心、1~6 格内（含相邻那圈，否则站在老家会卡死）。 */
+    private List<WorldMap.Hex> homeArea(Character c){return areaAround(new WorldMap.Hex(c.bindQ,c.bindR),1);}
     public boolean wander(long now,Set<UUID> engaged){
         boolean changed=false;
-        for(var c:all())if(c.npc()&&!engaged.contains(c.id)){var area=c.bully()?homeArea(c):roamingArea();if(area.isEmpty())continue;
+        for(var c:all())if(c.npc()&&!engaged.contains(c.id)){var area=homeArea(c);if(area.isEmpty())continue;
             if(c.life.equals("dead")&&c.timerEnd<=now){
                 if(c.deployed)continue; // 管理员投放的怪不重生，只留尸体
                 var occupied=new HashSet<>(all().stream().filter(x->!x.id.equals(c.id)&&!x.life.equals("soul")&&!x.life.equals("dead")).map(Character::hex).toList());var free=new ArrayList<>(area.stream().filter(h->!occupied.contains(h)).toList());if(free.isEmpty())continue;Collections.shuffle(free);var h=free.getFirst();relocate(c.id,h.q(),h.r());revive(c.id,now);kit(c.id);db.update("update characters set protected_until=0 where id=?",c.id);changed=true;}
