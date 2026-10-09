@@ -1,5 +1,11 @@
 .game-shell .battle-surface { position:absolute; inset:0; z-index:2; overflow:hidden; background:radial-gradient(ellipse at 52% 55%,#d3ddb1,#9eaf86 75%,#7f9778); }
 .battle-grain {position:absolute;inset:0;opacity:.2;background-image:radial-gradient(#f7e8bc 1px,transparent 1px);background-size:9px 9px;pointer-events:none}
+.loot-battle-open{position:absolute;z-index:5;top:110px;left:calc(var(--rail-width) + 12px);padding:8px 12px;border:1px solid #8b9b73;border-radius:8px;background:#f5f3e3;color:#365243}
+.battle-cell-loot{position:absolute;z-index:5;top:152px;left:calc(var(--rail-width) + 12px);display:flex;flex-direction:column;gap:5px;max-height:28%;overflow:auto;max-width:240px}
+.battle-cell-loot:empty{display:none}
+.battle-cell-loot button{padding:8px;background:#f5f3e3;color:#365243;border:1px solid #8b9b73;border-radius:6px}
+.loot-marker{pointer-events:none}
+@media(max-height:600px) and (orientation:landscape){.loot-battle-open{top:76px;padding:5px 8px;font-size:11px}.battle-cell-loot{top:108px;max-width:190px}.battle-cell-loot button{font-size:11px;padding:5px}}
 .battle-board {position:absolute;top:95px;left:var(--rail-width);width:calc(100% - var(--rail-width));height:calc(100% - 190px);touch-action:none;user-select:none}
 .battle-cell .cell-ground {stroke:#798e653b;stroke-width:1;cursor:pointer;transition:fill .12s}
 .battle-cell .cell-ground:focus {outline:none}
