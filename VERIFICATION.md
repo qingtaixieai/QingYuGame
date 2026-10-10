@@ -11,7 +11,7 @@
 - 已于2026-10-11部署至qingtaixieai.com，发布备份 `/opt/qingyu/backups/battle-20261011-041331`。线上迁移17成功；JAR SHA256与本地一致，为 `5a6ef8c114426ad6936acb5e06e787d87eee7e666540e1ee17061626c9698211`。公网入口资源为index-viW9aboO.js / index-DuhXhHIR.css，健康接口ok、systemd active。
 - 发布期间旧进程关闭WebSocket时记录了连接池已关闭的异常（04:13:33）；新进程04:13:42启动成功。此历史关闭顺序问题未在本轮改动，不把它误报成V17迁移失败。
 - Word设计文档已追加最新实现章节并保留修改前备份，结构回读通过；render_docx因本机缺少LibreOffice soffice.exe失败，分页排版未完成视觉校验。仓库内Markdown设计规则完整同步，可直接查看。
-- GitHub提交/推送状态在最终收尾后记录；上方上线状态已单独核验。
+- GitHub已成功推送 `bbf18e7..b5707a9` 至origin/main，包含此前NPC超时修复36345a6及本轮功能b5707a9；随后文档收尾提交仅更新发布记录，不改变已验证程序。
 
 ## 2026-10-10 恶霸卡回合修复接续核验
 
