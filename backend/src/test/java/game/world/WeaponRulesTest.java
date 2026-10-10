@@ -4,6 +4,25 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static game.world.WorldMap.Hex;
 class WeaponRulesTest {
+ @Test void edgeFanRejectsPartialShapeButAllowsOtherAimCoveringTarget(){
+   var axe=new WeaponRules.Weapon("axe","","fan",1,1,2,3);
+   var from=new Hex(6,0);var target=new Hex(5,1);
+   assertFalse(WeaponRules.cells(axe,from,target).isEmpty());
+   assertTrue(WeaponRules.battlefieldCells(axe,from,new Hex(6,-1),6).isEmpty());
+   assertTrue(WeaponRules.DIRECTIONS.stream().map(d->new Hex(from.q()+d.q(),from.r()+d.r()))
+       .map(aim->WeaponRules.battlefieldCells(axe,from,aim,6)).anyMatch(cells->cells.contains(target)));
+ }
+ @Test void battlefieldShapeIsNeverClippedForAnyWeaponOrEdge(){
+   for(var w:List.of(WeaponRules.UNARMED,WeaponRules.CLAWS,new WeaponRules.Weapon("axe","","fan",1,1,2,3),new WeaponRules.Weapon("spear","","line",1,2,2,3),new WeaponRules.Weapon("flail","","single",2,2,2,5)))
+     for(int q=-6;q<=6;q++)for(int r=-6;r<=6;r++){
+       var from=new Hex(q,r);if(WeaponRules.distance(new Hex(0,0),from)>6)continue;
+       for(int dq=-2;dq<=2;dq++)for(int dr=-2;dr<=2;dr++){
+         var target=new Hex(q+dq,r+dr);var raw=WeaponRules.cells(w,from,target);
+         var legal=WeaponRules.battlefieldCells(w,from,target,6);
+         assertEquals(raw.stream().anyMatch(h->WeaponRules.distance(new Hex(0,0),h)>6)?List.of():raw,legal);
+       }
+     }
+ }
  @Test void flailHasBlindFirstRing(){var w=new WeaponRules.Weapon("flail","","single",2,2,2,5);var origin=new Hex(0,0);assertTrue(WeaponRules.cells(w,origin,new Hex(1,0)).isEmpty());int count=0;for(int q=-2;q<=2;q++)for(int r=-2;r<=2;r++)if(!WeaponRules.cells(w,origin,new Hex(q,r)).isEmpty())count++;assertEquals(12,count);}
  @Test void axeCoversSixDistinctConnectedFans(){var w=new WeaponRules.Weapon("axe","","fan",1,1,2,3);Set<Set<Hex>> shapes=new HashSet<>();for(var d:WeaponRules.DIRECTIONS){var cells=WeaponRules.cells(w,new Hex(0,0),d);assertEquals(2,cells.size());assertEquals(1,WeaponRules.distance(cells.get(0),cells.get(1)));shapes.add(Set.copyOf(cells));}assertEquals(6,shapes.size());}
  @Test void spearAcceptsBothCellsButRejectsDiagonalSecondRing(){var w=new WeaponRules.Weapon("spear","","line",1,2,2,3);assertEquals(List.of(new Hex(1,0),new Hex(2,0)),WeaponRules.cells(w,new Hex(0,0),new Hex(2,0)));assertTrue(WeaponRules.cells(w,new Hex(0,0),new Hex(1,1)).isEmpty());}

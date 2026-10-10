@@ -37,6 +37,7 @@ public class BattleService {
     private final EquipmentService equipment;
     private final LootService loot;
     private final tools.jackson.databind.json.JsonMapper json=tools.jackson.databind.json.JsonMapper.builder().build();
+    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(BattleService.class);
     private final Map<UUID,Long> aiNext=new HashMap<>();
     private final long turnMillis;
 
@@ -98,7 +99,8 @@ public class BattleService {
         List<String> out=new ArrayList<>();
         if(c.alive()){out.add("move");if(l.canAttack())out.add("attack");out.add("endTurn");}
         if(l.canGuard())out.add("guard");
-        if(c.kind().equals("player")){if(Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from inventories where character_id=? and item_code='bandage' and quantity>0)",Boolean.class,c.id())))out.add("bandage");out.add("rescue");}
+        if(Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from inventories where character_id=? and item_code='bandage' and quantity>0)",Boolean.class,c.id())))out.add("bandage");
+        if(c.kind().equals("player"))out.add("rescue");
         out.add("withdraw");return out;
     }
 
@@ -225,8 +227,8 @@ public class BattleService {
         Encounter b=requireTurn(actor);requireStanding(actor);Position from=position(b.id(),actor);
         if(!characters.loadout(actor).canAttack())throw bad("当前装备无法普通攻击");
         var weapon=characters.weapon(actor);
-        var cells=WeaponRules.cells(weapon,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r));
-        if(cells.isEmpty()||cells.stream().anyMatch(h->!within(h.q(),h.r())))throw bad("请选择武器可攻击的完整范围");
+        var cells=WeaponRules.battlefieldCells(weapon,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r),RADIUS);
+        if(cells.isEmpty())throw bad("请选择武器可攻击的完整范围");
         Intent previous=intents(b.id()).stream().filter(i->i.attackerId().equals(actor)).findFirst().orElse(null);
         if(previous!=null&&previous.q()==q&&previous.r()==r)return;
         if(b.points()<weapon.cost())throw bad("本回合战术点不足");
@@ -388,10 +390,22 @@ public class BattleService {
             Position turn=position(current.id(),current.turn());
             if(turn==null){advanceTurn(current,-1,online,now);changed=true;continue;}
             var c=characters.get(current.turn());
-            if(c.npc()&&c.alive()){
-                if(aiNext.getOrDefault(c.id(),0L)<=now){aiNext.put(c.id(),now+700);actNpc(current,online,now);changed=true;}
-            }else if(!c.alive()||!online.contains(c.id())||current.deadline()<=now){
+            // Timeout applies before the controller (human or AI) is allowed to act.
+            if(!c.alive()||current.deadline()<=now||!c.npc()&&!online.contains(c.id())){
                 if(positions(current.id()).stream().anyMatch(p->online.contains(p.id())||characters.get(p.id()).npc())){advanceTurn(current,turn.initiative(),online,now);changed=true;}
+            }else if(c.npc()){
+                if(aiNext.getOrDefault(c.id(),0L)<=now){
+                    aiNext.put(c.id(),now+700);
+                    try{actNpc(current,online,now);}
+                    catch(org.springframework.web.server.ResponseStatusException rejected){
+                        // A rejected AI command has no human controller to choose another action.
+                        // Database/programming errors must still surface.
+                        log.warn("NPC command rejected; ending turn. battle={} actor={} reason={}",current.id(),c.id(),rejected.getReason());
+                        Encounter remaining=byId(current.id());
+                        if(remaining!=null&&remaining.turn().equals(c.id()))endTurn(c.id(),online,now);
+                    }
+                    changed=true;
+                }
             }
         }return changed;
     }
@@ -419,7 +433,20 @@ public class BattleService {
         var standing=targets.stream().filter(p->characters.get(p.id()).alive()).toList();if(!standing.isEmpty())targets=standing;
         var options=new ArrayList<MonsterBrain.Option>();
         Intent pending=intents(b.id()).stream().filter(i->i.attackerId().equals(own.id())).findFirst().orElse(null);
-        for(var t:targets){var h=new WorldMap.Hex(t.q(),t.r());if(distance(own.q(),own.r(),t.q(),t.r())==1&&b.points()>=2&&(pending==null||!pending.cells().contains(h)))options.add(new MonsterBrain.Option("attack",h,8+(characters.get(t.id()).hp()<=3?4:0)));}
+        var weapon=characters.weapon(own.id());
+        if(characters.loadout(own.id()).canAttack()&&b.points()>=weapon.cost()){
+            // Enumerate aim cells, not only targets: a fan can hit a target with its second cell.
+            for(int q=-RADIUS;q<=RADIUS;q++)for(int r=-RADIUS;r<=RADIUS;r++){
+                var aim=new WorldMap.Hex(q,r);
+                var cells=WeaponRules.battlefieldCells(weapon,from,aim,RADIUS);
+                if(cells.isEmpty())continue;
+                double score=0;
+                for(var t:targets){var h=new WorldMap.Hex(t.q(),t.r());
+                    if(cells.contains(h)&&(pending==null||!pending.cells().contains(h)))score+=8+(characters.get(t.id()).hp()<=3?4:0);
+                }
+                if(score>0)options.add(new MonsterBrain.Option("attack",aim,score));
+            }
+        }
         if(b.points()>=2){var self=characters.get(own.id());if(self.hp()<self.maxHp()&&equipment.has(own.id(),"bandage"))options.add(new MonsterBrain.Option("heal",from,self.hp()*2<=self.maxHp()?14:6));}
         if(b.points()>0)for(var next:from.neighbors())if(within(next.q(),next.r())&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
             double score=0;int nearest=targets.stream().mapToInt(p->distance(next.q(),next.r(),p.q(),p.r())).min().orElse(20),before=targets.stream().mapToInt(p->distance(from.q(),from.r(),p.q(),p.r())).min().orElse(20);
@@ -432,19 +459,8 @@ public class BattleService {
         var choice=MonsterBrain.choose(options);
         if(choice==null)endTurn(own.id(),online,now);
         else if(choice.action().equals("attack"))attackCell(own.id(),choice.cell().q(),choice.cell().r(),online,now);
-        else if(choice.action().equals("heal"))healSelf(own.id(),online,now);
+        else if(choice.action().equals("heal"))bandage(own.id(),own.id(),online,now);
         else step(own.id(),choice.cell().q(),choice.cell().r(),online,now);
-    }
-    /** 生物用背包里的绷带治疗自己（与玩家绷带一致：花 2 点，回 4 血）。 */
-    private void healSelf(UUID actor,Set<UUID> online,long now){
-        Encounter b=requireTurn(actor);Position a=position(b.id(),actor);
-        if(a==null||b.points()<2)return;
-        var self=characters.get(actor);if(!self.alive()||self.hp()>=self.maxHp())return;
-        equipment.consume(actor,"bandage",1);
-        characters.heal(actor,4);
-        db.update("update battle_encounters set turn_points=turn_points-2 where id=?",b.id());
-        event(b.id(),"bandage",actor,actor,a.q(),a.r(),now);
-        if(b.points()<=2)advanceTurn(b,a.initiative(),online,now);
     }
     public boolean resume(UUID actor,long now){
         Encounter b=forActor(actor);

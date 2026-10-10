@@ -20,6 +20,11 @@ public final class WeaponRules {
     public static final List<Hex> DIRECTIONS=List.of(new Hex(1,0),new Hex(0,1),new Hex(-1,1),new Hex(-1,0),new Hex(0,-1),new Hex(1,-1));
     public static int distance(Hex a,Hex b){return Math.max(Math.max(Math.abs(a.q()-b.q()),Math.abs(a.r()-b.r())),Math.abs(a.q()+a.r()-b.q()-b.r()));}
     public static boolean inRange(Weapon w,Hex from,Hex to){int d=distance(from,to);return d>=w.minRange&&d<=w.maxRange;}
+    /** A multi-cell attack is legal only when its entire shape fits the battlefield. */
+    public static List<Hex> battlefieldCells(Weapon w,Hex from,Hex target,int radius){
+        var result=cells(w,from,target);
+        return result.stream().anyMatch(h->distance(new Hex(0,0),h)>radius)?List.of():result;
+    }
     public static List<Hex> cells(Weapon w,Hex from,Hex target){
         if(!inRange(w,from,target))return List.of();
         if(w.shape.equals("single"))return List.of(target);
