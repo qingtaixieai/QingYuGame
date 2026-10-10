@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import {Footprints,Swords,Shield,Package,HeartHandshake,LogOut,Bandage,LockKeyhole,Unlock,Settings2,Check,X,Plus,LoaderCircle,RefreshCw} from 'lucide-react';
+import {Crosshair,Target as Bow,FlaskConical,Hand,Footprints,Swords,Shield,Package,HeartHandshake,LogOut,Bandage,LockKeyhole,Unlock,Settings2,Check,X,Plus,LoaderCircle,RefreshCw} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {api} from './api';
 import './hotbar.css';
@@ -7,8 +7,8 @@ import './hotbar.css';
 type Slot={source:string;index:number;actionRef:string|null;locked:boolean};
 export type Action={id:string;source:string;name:string;icon:string;command:string;description:string;cost:number;costKind:string;quantity:number|null;disabledReason:string};
 type Layout={revision:number;slots:Slot[];actions:Action[]};
-const pages=[['common','通用'],['weapon','武器'],['item','道具'],['spell','法术'],['class','职业']];
-const icons={move:Footprints,attack:Swords,guard:Shield,equipment:Package,rescue:HeartHandshake,withdraw:LogOut,bandage:Bandage};
+const pages=[['common','通用'],['weapon','武器'],['item','道具'],['skill','技能'],['spell','法术'],['class','职业']];
+const icons={'quick-shot':Bow,aim:Crosshair,'aimed-shot':Bow,potion:FlaskConical,'throw-stone':Hand,'skill:interrupt':Hand,move:Footprints,attack:Swords,guard:Shield,equipment:Package,rescue:HeartHandshake,withdraw:LogOut,bandage:Bandage};
 export function Hotbar({signature,connected,busy,mode,points,reaction,armor,commands,onAction,onMessage,onEdit}:{signature:string;connected:boolean;busy:boolean;mode:string;points:number|null;reaction:number;armor:number;commands:ReactNode;onAction:(action:Action)=>void;onMessage:(message:string)=>void;onEdit:()=>void}){
  const [data,setData]=useState<Layout|null>(null),[page,setPage]=useState('common'),[editing,setEditing]=useState(false),[selected,setSelected]=useState<number|null>(null),[saving,setSaving]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[retry,setRetry]=useState(0),[adding,setAdding]=useState(false);
  const request=useRef(0),dragged=useRef<number|null>(null),pending=useRef(false);

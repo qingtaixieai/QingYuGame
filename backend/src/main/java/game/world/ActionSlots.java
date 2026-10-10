@@ -4,7 +4,7 @@ import java.util.*;
 
 /** Slot references and user choices are independent of action definitions. */
 public final class ActionSlots {
-    public static final List<String> SOURCES=List.of("common","weapon","item","spell","class");
+    public static final List<String> SOURCES=List.of("common","weapon","item","skill","spell","class");
     public record Slot(String source,int index,String actionRef,boolean locked) {}
     public record Layout(List<Slot> slots,List<String> known) {}
     public static Layout empty(){
@@ -15,6 +15,8 @@ public final class ActionSlots {
     public static Layout reconcile(Layout old,Map<String,String> owned){
         var slots=new ArrayList<Slot>();
         for(var s:old.slots())slots.add(new Slot(s.source(),s.index(),s.actionRef()!=null&&owned.containsKey(s.actionRef())?s.actionRef():null,s.locked()));
+        for(String source:SOURCES)if(slots.stream().noneMatch(s->s.source().equals(source)))
+            for(int i=0;i<6;i++)slots.add(new Slot(source,i,null,false));
         for(var entry:owned.entrySet())if(!old.known().contains(entry.getKey())){
             int index=-1;
             for(int i=0;i<slots.size();i++){var s=slots.get(i);if(s.source().equals(entry.getValue())&&!s.locked()&&s.actionRef()==null){index=i;break;}}

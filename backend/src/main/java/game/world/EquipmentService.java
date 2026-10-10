@@ -10,7 +10,7 @@ public class EquipmentService {
     private final JdbcTemplate db;
     EquipmentService(JdbcTemplate db){this.db=db;}
     public record Item(String code,String name,String description,String kind,String handUsage,int passiveArmor,int guardReduction,int guardMinDamage,boolean grantsAttack) {}
-    public record Loadout(String mainHand,String offHand,WeaponRules.Weapon weapon,Item offhand,int armor,boolean canGuard,int guardReduction,int guardMinDamage) {
+    public record Loadout(String mainHand,String offHand,WeaponRules.Weapon weapon,Item offhand,int armor,boolean canGuard,int guardReduction,int guardMinDamage,String body) {
         public boolean canAttack(){return weapon.damage()>0&&(offhand==null||!offhand.handUsage().equals("off_two"));}
     }
     private Item item(String code){
@@ -26,19 +26,27 @@ public class EquipmentService {
             (r,n)->new WeaponRules.Weapon(r.getString(1),r.getString(2),r.getString(3),r.getInt(4),r.getInt(5),r.getInt(6),r.getInt(7),r.getString(8)),code).stream().findFirst().orElseThrow(()->AccountService.bad("武器不存在"));
     }
     public List<Map<String,Object>> catalog(){return db.queryForList("select * from item_definitions order by code");}
+    public record Projectile(String ammoCode,int aimCost,int aimDamage) {}
+    public Projectile projectile(String code){return db.query("select ammo_code,aim_cost,aim_damage from item_definitions where code=? and ammo_code is not null",(r,n)->new Projectile(r.getString(1),r.getInt(2),r.getInt(3)),code).stream().findFirst().orElse(null);}
     public Loadout loadout(UUID id){
-        var row=db.queryForMap("select weapon,offhand from characters where id=?",id);
+        var row=db.queryForMap("select weapon,offhand,body from characters where id=?",id);
         String main=(String)row.get("weapon"),off=(String)row.get("offhand");
         Item mainItem=main==null?null:item(main),offItem=off==null?null:item(off);
-        int armor=(mainItem==null?0:mainItem.passiveArmor())+(offItem==null?0:offItem.passiveArmor());
+        String body=(String)row.get("body");Item bodyItem=item(body);
+        int armor=(mainItem==null?0:mainItem.passiveArmor())+(offItem==null?0:offItem.passiveArmor())+(bodyItem==null?0:bodyItem.passiveArmor());
         Item guard=java.util.stream.Stream.of(mainItem,offItem).filter(Objects::nonNull).filter(i->i.guardReduction()>0).findFirst().orElse(null);
         WeaponRules.Weapon weapon=(mainItem!=null&&mainItem.grantsAttack())?weapon(main):WeaponRules.UNARMED;
-        return new Loadout(main,off,weapon,offItem,armor,guard!=null,guard==null?0:guard.guardReduction(),guard==null?1:guard.guardMinDamage());
+        return new Loadout(main,off,weapon,offItem,armor,guard!=null,guard==null?0:guard.guardReduction(),guard==null?1:guard.guardMinDamage(),body);
     }
     public void equip(UUID id,String code){
         equip(id,code,null);
     }
     public void equip(UUID id,String main,String off){
+        equip(id,main,off,db.queryForObject("select body from characters where id=?",String.class,id));
+    }
+    public void equip(UUID id,String main,String off,String body){
+        Item bodyItem=item(body);
+        if(bodyItem!=null&&!bodyItem.kind().equals("armor"))throw AccountService.bad("躯干只能装备护甲");
         Item mainItem=main==null?null:item(main),offItem=off==null?null:item(off);
         if(mainItem!=null&&!(mainItem.kind().equals("weapon")||mainItem.kind().equals("shield")))throw AccountService.bad("主手只能装备武器或双手盾");
         if(offItem!=null&&!offItem.kind().equals("shield"))throw AccountService.bad("副手只能装备盾牌");
@@ -48,16 +56,19 @@ public class EquipmentService {
         if(offItem!=null&&offItem.handUsage().equals("off_two"))main=null;
         if(mainItem!=null&&mainItem.handUsage().equals("none"))throw AccountService.bad("这件物品不能装备");
         if(offItem!=null&&offItem.handUsage().equals("none"))throw AccountService.bad("这件物品不能装备");
-        Map<String,Object> old=db.queryForMap("select weapon,offhand from characters where id=?",id);
+        Map<String,Object> old=db.queryForMap("select weapon,offhand,body from characters where id=?",id);
         String oldMain=(String)old.get("weapon"),oldOff=(String)old.get("offhand");
-        if(Objects.equals(oldMain,main)&&Objects.equals(oldOff,off))return;
+        String oldBody=(String)old.get("body");
+        if(Objects.equals(oldMain,main)&&Objects.equals(oldOff,off)&&Objects.equals(oldBody,body))return;
         Map<String,Integer> need=new HashMap<>();
         if(main!=null&&!main.equals(oldMain)&&!main.equals(oldOff))need.merge(main,1,Integer::sum);
         if(off!=null&&!off.equals(oldMain)&&!off.equals(oldOff))need.merge(off,1,Integer::sum);
+        if(body!=null&&!body.equals(oldBody))need.merge(body,1,Integer::sum);
         for(var e:need.entrySet())if(db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",e.getValue(),id,e.getKey(),e.getValue())==0)throw AccountService.bad("背包中缺少需要装备的物品");
         if(oldMain!=null&&!oldMain.equals(main)&&!oldMain.equals(off))give(id,oldMain,1);
         if(oldOff!=null&&!oldOff.equals(main)&&!oldOff.equals(off))give(id,oldOff,1);
-        db.update("update characters set weapon=?,offhand=? where id=?",main,off,id);
+        if(oldBody!=null&&!oldBody.equals(body))give(id,oldBody,1);
+        db.update("update characters set weapon=?,offhand=?,body=? where id=?",main,off,body,id);
     }
     public void give(UUID id,String code,int quantity){
         if(code==null)throw AccountService.bad("请选择武器");

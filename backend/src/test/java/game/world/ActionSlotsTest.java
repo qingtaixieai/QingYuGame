@@ -32,6 +32,6 @@ class ActionSlotsTest {
     }
     @Test void fullyLockedPageExpandsWithoutOverwriting(){
         var l=ActionSlots.empty();for(int i=12;i<18;i++)l=ActionSlots.edit(l,"lock",i,null,null,Map.of());
-        var next=ActionSlots.reconcile(l,Map.of("bandage","item"));assertEquals(31,next.slots().size());assertEquals("bandage",next.slots().getLast().actionRef());assertEquals(6,next.slots().getLast().index());
+        var next=ActionSlots.reconcile(l,Map.of("bandage","item"));assertEquals(ActionSlots.SOURCES.size()*6+1,next.slots().size());assertEquals("bandage",next.slots().getLast().actionRef());assertEquals(6,next.slots().getLast().index());
     }
 }

@@ -28,8 +28,8 @@ public class WorldService {
     private final ResourceService resources;private final ModerationService moderation;
     private final CharacterService characters;private final EquipmentService equipment;
     private final BattleService battles;private final FerryService ferry;private final HotbarService hotbar;
-    private final LootService loot;
-    WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment,HotbarService hotbar,LootService loot){this.loot=loot;this.hotbar=hotbar;this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
+    private final LootService loot;private final SkillService skills;
+    WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment,HotbarService hotbar,LootService loot,SkillService skills){this.skills=skills;this.loot=loot;this.hotbar=hotbar;this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
     @PostConstruct void load(){
         var rows=db.queryForList("select document from worlds where id=1",String.class);
         if(rows.isEmpty()) {world=WorldMap.generate(new SecureRandom().nextLong());db.update("insert into worlds values(1,?)",json.writeValueAsString(world));}
@@ -194,6 +194,7 @@ public class WorldService {
     private void requireBattle(UUID actor,UUID battleId){
         if(battleId==null||!battleId.equals(battles.currentId(actor)))throw AccountService.bad("战斗已变化，请刷新战场");
     }
+    public synchronized Object battleReport(UUID actor){return battles.report(actor);}
     public synchronized Object currentBattle(UUID actor){return battles.current(actor,onlineUsers());}
     public synchronized HotbarService.State hotbar(UUID actor){return tx.execute(s->hotbar.state(actor,battles.current(actor,onlineUsers())));}
     public synchronized HotbarService.State editHotbar(UUID actor,HotbarService.Edit edit){
@@ -311,10 +312,11 @@ public class WorldService {
     public synchronized CharacterService.Character character(UUID id){return characters.get(id);}
     public synchronized List<Map<String,Object>> catalog(){return equipment.catalog();}
     public synchronized void equip(UUID id,String code){equip(id,code,null);}
-    public synchronized void equip(UUID id,String main,String off){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中请使用战斗栏换装");tx.executeWithoutResult(s->{equipment.equip(id,main,off);hotbar.sync(id);});broadcast();}
-    public synchronized void grant(UUID admin,UUID target,String code,int quantity){accounts.get(target);tx.executeWithoutResult(s->{equipment.give(target,code,quantity);hotbar.sync(target);audit(admin,"grant-item",target+":"+code+":"+quantity);});battleRevision++;broadcast();}
+    public synchronized void equip(UUID id,String main,String off){equip(id,main,off,characters.loadout(id).body());}
+    public synchronized void equip(UUID id,String main,String off,String body){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中请使用战斗栏换装");tx.executeWithoutResult(s->{equipment.equip(id,main,off,body);hotbar.sync(id);});broadcast();}
+    public synchronized void grant(UUID admin,UUID target,String code,int quantity){characters.get(target);tx.executeWithoutResult(s->{equipment.give(target,code,quantity);if(!characters.get(target).npc())hotbar.sync(target);audit(admin,"grant-item",target+":"+code+":"+quantity);});battleRevision++;broadcast();}
     /** 管理员在固定地点投放一只生物（恶霸/利爪怪）。坐标无效或已被占用则拒绝；投放的怪会自己游荡、被打死后不重生。 */
-    public synchronized void deploy(UUID admin,String species,int q,int r){if(!"bully".equals(species)&&!"claw".equals(species))throw AccountService.bad("未知的生物种类");var tile=world.index().get(new WorldMap.Hex(q,r));if(tile==null)throw AccountService.bad("这个位置在世界之外");if(!tile.walkable())throw AccountService.bad("这里不可通行，无法投放");boolean occupied=characters.all().stream().anyMatch(c->!c.life().equals("soul")&&!c.life().equals("dead")&&c.q()==q&&c.r()==r);if(occupied)throw AccountService.bad("这里已有角色，请另选一格");tx.executeWithoutResult(s->{characters.deploy(species,q,r,System.currentTimeMillis());audit(admin,"deploy-creature",species+"@"+q+","+r);});battleRevision++;broadcast();}
+    public synchronized void deploy(UUID admin,String species,int q,int r){if(!Set.of("bully","claw","archer").contains(Objects.requireNonNullElse(species,"")))throw AccountService.bad("未知的生物种类");var tile=world.index().get(new WorldMap.Hex(q,r));if(tile==null)throw AccountService.bad("这个位置在世界之外");if(!tile.walkable())throw AccountService.bad("这里不可通行，无法投放");boolean occupied=characters.all().stream().anyMatch(c->!c.life().equals("soul")&&!c.life().equals("dead")&&c.q()==q&&c.r()==r);if(occupied)throw AccountService.bad("这里已有角色，请另选一格");tx.executeWithoutResult(s->{characters.deploy(species,q,r,System.currentTimeMillis());audit(admin,"deploy-creature",species+"@"+q+","+r);});battleRevision++;broadcast();}
     public synchronized void lifeAction(UUID id,String action,UUID target){
         if(action==null)throw AccountService.bad("请选择行动");
         long now=System.currentTimeMillis();
@@ -331,6 +333,7 @@ public class WorldService {
                     case "revive" -> {characters.returnToMark(id,now);battles.rejoinAtCell(id,now);}
                     case "cancel" -> characters.cancelTimer(id);
                     case "rescue" -> {characters.requireAlive(id);var a=characters.get(id);var t=characters.get(target);if(t.npc()||!a.hex().equals(t.hex())||battles.engaged(target))throw AccountService.bad("请与倒地旅人处于同一世界格");characters.rescue(target);}
+                    case "potion" -> {characters.requireAlive(id);var c=characters.get(id);if(c.hp()>=c.maxHp())throw AccountService.bad("生命已满");equipment.consume(id,"healing_potion",1);characters.heal(id,6);}
                     case "bandage" -> {characters.requireAlive(id);var a=characters.get(id);UUID healTarget=target==null?id:target;var t=characters.get(healTarget);if(!a.hex().equals(t.hex()))throw AccountService.bad("战斗外绷带只能治疗同格角色");if(!t.alive())throw AccountService.bad("只能治疗站立存活角色");if(t.hp()>=t.maxHp())throw AccountService.bad("目标已满血");equipment.consume(id,"bandage",1);characters.heal(healTarget,4);}
                     default -> throw AccountService.bad("行动不存在");
                 }
@@ -341,7 +344,12 @@ public class WorldService {
     public synchronized void battleGuard(UUID actor,UUID battleId){requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.guard(actor,System.currentTimeMillis()));battleRevision++;broadcast();}
     public synchronized void battleCancelGuard(UUID actor,UUID battleId){requireBattle(actor,battleId);tx.executeWithoutResult(s->battles.cancelGuard(actor,System.currentTimeMillis()));battleRevision++;broadcast();}
     public synchronized void battleBandage(UUID actor,UUID target){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->{battles.bandage(actor,target,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);});battleRevision++;broadcast();}
-    public synchronized void battleEquip(UUID actor,String main,String off){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->{battles.equip(actor,main,off,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);});battleRevision++;broadcast();}
+    public synchronized void battleEquip(UUID actor,String main,String off){battleEquip(actor,main,off,characters.loadout(actor).body());}
+    public synchronized void battleEquip(UUID actor,String main,String off,String body){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->{battles.equip(actor,main,off,body,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);});battleRevision++;broadcast();}
+    public synchronized void battleAction(UUID actor,UUID battleId,String action,UUID target,Integer q,Integer r){requireBattle(actor,battleId);tx.executeWithoutResult(s->{battles.action(actor,action,target,q,r,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);});battleRevision++;broadcast();}
+    public synchronized Object adminCharacters(){return characters.all();}
+    public synchronized Object learnedSkills(UUID id){characters.get(id);return skills.learned(id);}
+    public synchronized void grantSkill(UUID admin,UUID target,String code,boolean granted){characters.get(target);tx.executeWithoutResult(s->{skills.set(target,code,granted);if(!characters.get(target).npc())hotbar.sync(target);audit(admin,"skill",target+":"+code+":"+granted);});battleRevision++;broadcast();}
     private void broadcast(){
         if(connections.isEmpty())return;
 

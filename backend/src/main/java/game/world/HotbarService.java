@@ -16,19 +16,20 @@ public class HotbarService {
     private record Saved(long revision,ActionSlots.Layout layout) {}
     private final JdbcTemplate db;
     private final CharacterService characters;
+    private final BattleService battles;
+    private final CombatActions combatActions;
+    private final EquipmentService equipment;
     private final JsonMapper json=JsonMapper.builder().build();
-    HotbarService(JdbcTemplate db,CharacterService characters){this.db=db;this.characters=characters;}
+    HotbarService(JdbcTemplate db,CharacterService characters,BattleService battles,CombatActions combatActions,EquipmentService equipment){this.db=db;this.characters=characters;this.battles=battles;this.combatActions=combatActions;this.equipment=equipment;}
     private List<Action> owned(UUID id){
-        var l=characters.loadout(id);var out=new ArrayList<Action>();
-        out.add(action("move","common","移动","move","move","沿可达路线移动，每格消耗1行动点。",1,"movement",null));
-        out.add(action("equipment","common","装备 / 道具","equipment","equipment","预览主副手与道具；确认换装消耗2点，取消不消耗。",2,"action",null));
-        out.add(action("rescue","common","救援","rescue","rescue","救起相邻倒地旅人，恢复5生命并结束回合。",6,"action",null));
-        out.add(action("withdraw","common","准备撤离","withdraw","withdraw","从有效外圈撤离，立即结束回合，下回合离场。",0,"turn",null));
-        out.add(action("force-withdraw","common","强制撤离","withdraw","force-withdraw","回合开始已在外圈且保留完整6点时立即离场。",6,"action",null));
-        if(l.canAttack()){var w=l.weapon();out.add(action("attack:"+w.code(),"weapon",w.name(),"attack","attack",w.damage()+"伤害；预设攻击，范围 "+w.minRange()+"–"+w.maxRange()+"格。",w.cost(),"action",null));}
-        if(l.canGuard())out.add(action("guard:"+l.offHand(),"weapon","举盾","guard","guard","将最多2行动点转为反应点；举盾额外减伤"+l.guardReduction()+"。",1,"reaction",null));
-        long bandages=db.queryForObject("select coalesce((select quantity from inventories where character_id=? and item_code='bandage'),0)",Long.class,id);
-        if(bandages>0)out.add(action("bandage","item","绷带","bandage","bandage","消耗1绷带，治疗自己或相邻站立角色4生命。",2,"action",bandages));
+        var out=new ArrayList<Action>();
+        for(var d:combatActions.owned(id)){
+            Long quantity=d.item()==null?null:db.queryForObject("select coalesce((select quantity from inventories where character_id=? and item_code=?),0)",Long.class,id,d.item());
+            String command=d.effect().startsWith("legacy:")?d.effect().substring(7):d.id();
+            String kind=switch(command){case "move"->"movement";case "guard"->"reaction";case "withdraw"->"turn";default->"action";};
+            String icon=command.equals("force-withdraw")?"withdraw":command;
+            out.add(action(d.id(),d.source(),d.name(),icon,command,d.description(),d.cost(),kind,quantity));
+        }
         return out;
     }
     private static Action action(String id,String source,String name,String icon,String command,String description,int cost,String kind,Long quantity){return new Action(id,source,name,icon,command,description,cost,kind,quantity,"");}
@@ -59,7 +60,9 @@ public class HotbarService {
         int points=(Integer)b.getOrDefault("turnPoints",0);
         String common=own==null?"当前不在战斗中":!own.character().alive()?"倒地或灵魂状态无法行动":own.entryRound()>(Integer)b.get("round")?"下一轮开始行动":!id.equals(b.get("turnAccountId"))?"现在不是你的回合":"";
         var available=new ArrayList<Action>();
+        var shared=new HashMap<String,BattleService.ActionOption>();battles.actionOptions(id).forEach(o->shared.put(o.definition().id(),o));
         for(var a:actions){
+            if(shared.containsKey(a.id())){var o=shared.get(a.id());available.add(new Action(a.id(),a.source(),a.name(),a.icon(),a.command(),a.description(),a.cost(),a.costKind(),a.quantity(),Objects.requireNonNullElse(o.disabledReason(),"")));continue;}
             int cost=a.cost();String reason=common;
             if(own!=null&&a.command().equals("guard"))cost=Math.max(0,Math.min(2-own.reactionPoints(),points));
             if(reason.isEmpty()){

@@ -41,9 +41,10 @@ public class LootService {
         // 生物背包物品随尸体掉落；装备的武器也一并进入尸体供玩家拾取。
         for(var row:db.queryForList("select item_code,quantity from inventories where character_id=? and quantity>0",c.id()))
             db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,?) on conflict(container_id,item_code) do update set quantity=loot_items.quantity+excluded.quantity",id,row.get("item_code"),row.get("quantity"));
-        String weapon=c.weapon();
-        if(weapon!=null&&!weapon.equals("unarmed")&&!weapon.equals("claws"))
-            db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,1) on conflict(container_id,item_code) do update set quantity=loot_items.quantity+1",id,weapon);
+        for(String code:new String[]{c.weapon(),c.offhand(),c.body()})if(code!=null&&!Set.of("unarmed","claws").contains(code))
+            db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,1) on conflict(container_id,item_code) do update set quantity=loot_items.quantity+1",id,code);
+        db.update("delete from inventories where character_id=?",c.id());
+        db.update("update characters set weapon=null,offhand=null,body=null where id=?",c.id());
     }
     public void enterBattle(UUID battle,String version,int q,int r){
         var old=query("where carrier_id is null and battle_id is null and world_version=? and q=? and r=?",version,q,r);

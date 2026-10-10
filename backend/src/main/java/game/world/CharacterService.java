@@ -9,7 +9,7 @@ import java.util.*;
 @Service
 public class CharacterService {
     public record Character(UUID id,String kind,String species,String name,int q,int r,int hp,int maxHp,int downHp,int maxDownHp,String life,
-        int strength,int agility,int constitution,int intellect,int perception,int willpower,String weapon,String offhand,
+        int strength,int agility,int constitution,int intellect,int perception,int willpower,String weapon,String offhand,String body,
         int bindQ,int bindR,Integer deathQ,Integer deathR,String timerKind,long timerEnd,long protectedUntil,
         boolean deployed) {
         public boolean alive(){return life.equals("alive");}
@@ -37,7 +37,7 @@ public class CharacterService {
     }
     public void ensurePlayers(){db.update("insert into characters(id,account_id,bind_q,bind_r) select id,id,?,? from accounts on conflict(id) do nothing",world.spawn().q(),world.spawn().r());}
     private static final String PROFILE_SQL="select c.*,coalesce(a.username,c.name) as display_name,coalesce(a.q,c.q) as world_q,coalesce(a.r,c.r) as world_r from characters c left join accounts a on a.id=c.account_id";
-    private static final org.springframework.jdbc.core.RowMapper<Character> PROFILE=(r,n)->new Character(r.getObject("id",UUID.class),r.getString("kind"),r.getString("species"),r.getString("display_name"),r.getInt("world_q"),r.getInt("world_r"),r.getInt("hp"),r.getInt("max_hp"),r.getInt("down_hp"),r.getInt("max_down_hp"),r.getString("life"),r.getInt("strength"),r.getInt("agility"),r.getInt("constitution"),r.getInt("intellect"),r.getInt("perception"),r.getInt("willpower"),r.getString("weapon"),r.getString("offhand"),r.getInt("bind_q"),r.getInt("bind_r"),(Integer)r.getObject("death_q"),(Integer)r.getObject("death_r"),r.getString("timer_kind"),r.getLong("timer_end"),r.getLong("protected_until"),r.getBoolean("deployed"));
+    private static final org.springframework.jdbc.core.RowMapper<Character> PROFILE=(r,n)->new Character(r.getObject("id",UUID.class),r.getString("kind"),r.getString("species"),r.getString("display_name"),r.getInt("world_q"),r.getInt("world_r"),r.getInt("hp"),r.getInt("max_hp"),r.getInt("down_hp"),r.getInt("max_down_hp"),r.getString("life"),r.getInt("strength"),r.getInt("agility"),r.getInt("constitution"),r.getInt("intellect"),r.getInt("perception"),r.getInt("willpower"),r.getString("weapon"),r.getString("offhand"),r.getString("body"),r.getInt("bind_q"),r.getInt("bind_r"),(Integer)r.getObject("death_q"),(Integer)r.getObject("death_r"),r.getString("timer_kind"),r.getLong("timer_end"),r.getLong("protected_until"),r.getBoolean("deployed"));
     public List<Character> all(){return db.query(PROFILE_SQL,PROFILE);}
     public Character get(UUID id){return db.query(PROFILE_SQL+" where c.id=?",PROFILE,id).stream().findFirst().orElseThrow(()->AccountService.bad("角色不存在"));}
     public WeaponRules.Weapon weapon(UUID id){var c=get(id);var w=equipment.loadout(id).weapon();return c.npc()&&w.code().equals("unarmed")?WeaponRules.CLAWS:w;}
@@ -45,6 +45,10 @@ public class CharacterService {
     public void kit(UUID id){
         var c=get(id);
         db.update("delete from inventories where character_id=?",id);
+        if("archer".equals(c.species())){
+            db.update("update characters set weapon='short_bow',offhand=null,body='light_armor' where id=?",id);
+            give(id,"arrow",12);give(id,"healing_potion",1);return;
+        }
         var rnd=new java.security.SecureRandom();
         if(c.bully()){
             db.update("update characters set weapon='axe',offhand=null where id=?",id);
@@ -57,7 +61,7 @@ public class CharacterService {
     }
     /** 管理员在固定地点投放一只生物。species：'bully' 恶霸 / 'claw' 利爪怪。投放的怪记为 deployed，死后不重生。 */
     public Character deploy(String species,int q,int r,long now){
-        UUID id=UUID.randomUUID();String name=species.equals("bully")?"恶霸":"利爪怪";
+        UUID id=UUID.randomUUID();String name=switch(species){case "bully"->"恶霸";case "archer"->"弓箭手";default->"利爪怪";};
         db.update("insert into characters(id,kind,species,deployed,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster',?,true,?,?,?,12,12,6,6,?,?,?)",id,species,name,q,r,q,r,now);
         kit(id);return get(id);
     }
