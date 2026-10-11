@@ -37,6 +37,7 @@ public class BattleService {
     private final EquipmentService equipment;
     private final LootService loot;
     private final CombatActions combatActions;
+    private final StatusService statuses;
     private final tools.jackson.databind.json.JsonMapper json=tools.jackson.databind.json.JsonMapper.builder().build();
     private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(BattleService.class);
     private final Map<UUID,Long> aiNext=new HashMap<>();
@@ -45,11 +46,12 @@ public class BattleService {
     public record Summary(UUID id,int q,int r,int participants) {}
     public record Actor(UUID accountId,String username,String color,int q,int r,int initiative,int entryRound,boolean online,Integer withdrawDirection,CharacterService.Character character,WeaponRules.Weapon weapon,EquipmentService.Loadout loadout,int initiativeRoll,int initiativeScore,int reactionPoints,boolean shieldRaised,List<String> actions) {}
     public record Intent(UUID attackerId,UUID targetId,int q,int r,String visibility,List<WorldMap.Hex> cells,String weapon,int damage,int minRange,int maxRange,String moveRule,Integer originQ,Integer originR,String kind,boolean ready) {}
-    public record Event(long id,String kind,UUID actorId,UUID targetId,Integer q,Integer r,long happenedAt,String actorName,String targetName,Integer amount,Integer blocked) {}
+    public record Event(long id,String kind,UUID actorId,UUID targetId,Integer q,Integer r,long happenedAt,String actorName,String targetName,Integer amount,Integer blocked,Map<String,Object> details) {}
     private record Encounter(UUID id,String version,int q,int r,int round,UUID turn,int points,boolean attackUsed,long deadline,int nextInitiative,boolean turnStartEdge) {}
     private record Position(UUID id,int q,int r,int initiative,int entryRound) {}
 
-    BattleService(JdbcTemplate db,AccountService accounts,CharacterService characters,EquipmentService equipment,LootService loot,CombatActions combatActions,@Value("${game.battle.turn-ms:45000}") long turnMillis){
+    BattleService(JdbcTemplate db,AccountService accounts,CharacterService characters,EquipmentService equipment,LootService loot,CombatActions combatActions,StatusService statuses,@Value("${game.battle.turn-ms:45000}") long turnMillis){
+        this.statuses=statuses;
         this.db=db;this.accounts=accounts;this.characters=characters;this.equipment=equipment;this.loot=loot;this.combatActions=combatActions;this.turnMillis=Math.max(5000,turnMillis);
     }
 
@@ -72,16 +74,42 @@ public class BattleService {
     private void event(UUID battle,String kind,UUID actor,UUID target,Integer q,Integer r,long now){
         event(battle,kind,actor,target,q,r,now,null,null);
     }
+    private void detailLast(UUID battle,Map<String,Object> details){db.update("update battle_events set details=? where id=(select max(id) from battle_events where encounter_id=?)",json.writeValueAsString(details),battle);}
+    @SuppressWarnings("unchecked")
+    public Object publicCurrent(UUID viewer,Set<UUID> online){
+        Map<String,Object> data=json.readValue(json.writeValueAsString(current(viewer,online)),Map.class);
+        for(var raw:(List<Map<String,Object>>)data.getOrDefault("actors",List.of()))if(!viewer.toString().equals(raw.get("accountId"))){
+            var profile=(Map<String,Object>)raw.get("character");
+            for(String field:List.of("strength","agility","constitution","intellect","perception","willpower","weapon","offhand","body","bindQ","bindR","deathQ","deathR","timerKind","timerEnd","protectedUntil"))profile.remove(field);
+            raw.remove("loadout");raw.remove("weapon");raw.remove("initiativeRoll");raw.remove("initiativeScore");
+        }
+        redactEvents(data,viewer);
+        for(var raw:(List<Map<String,Object>>)data.getOrDefault("intents",List.of()))if(!viewer.toString().equals(raw.get("attackerId"))){raw.remove("damage");raw.remove("weapon");}
+        return data;
+    }
     private void event(UUID battle,String kind,UUID actor,UUID target,Integer q,Integer r,long now,Integer amount,Integer blocked){
         db.update("insert into battle_events(encounter_id,kind,actor_id,target_id,q,r,happened_at,actor_name,target_name,amount,blocked) values(?,?,?,?,?,?,?,?,?,?,?)",battle,kind,actor,target,q,r,now,actor==null?null:characters.get(actor).name(),target==null?null:characters.get(target).name(),amount,blocked);
     }
     private List<Event> events(UUID battle,int limit){
-        var result=db.query("select * from battle_events where encounter_id=? order by id desc limit ?",(rs,n)->new Event(rs.getLong("id"),rs.getString("kind"),rs.getObject("actor_id",UUID.class),rs.getObject("target_id",UUID.class),(Integer)rs.getObject("q"),(Integer)rs.getObject("r"),rs.getLong("happened_at"),rs.getString("actor_name"),rs.getString("target_name"),(Integer)rs.getObject("amount"),(Integer)rs.getObject("blocked")),battle,limit);
+        var result=db.query("select * from battle_events where encounter_id=? order by id desc limit ?",(rs,n)->new Event(rs.getLong("id"),rs.getString("kind"),rs.getObject("actor_id",UUID.class),rs.getObject("target_id",UUID.class),(Integer)rs.getObject("q"),(Integer)rs.getObject("r"),rs.getLong("happened_at"),rs.getString("actor_name"),rs.getString("target_name"),(Integer)rs.getObject("amount"),(Integer)rs.getObject("blocked"),rs.getString("details")==null?Map.of():json.readValue(rs.getString("details"),Map.class)),battle,limit);
         Collections.reverse(result);return result;
     }
     public Object report(UUID actor){
         var b=forActor(actor);if(b!=null)return Map.of("battleId",b.id(),"active",true,"events",events(b.id(),1000));
         return db.query("select document from recent_battle_reports where character_id=?",(r,n)->json.readValue(r.getString(1),Object.class),actor).stream().findFirst().orElse(Map.of("active",false,"events",List.of()));
+    }
+    @SuppressWarnings("unchecked")
+    public Object publicReport(UUID actor){
+        Map<String,Object> data=json.readValue(json.writeValueAsString(report(actor)),Map.class);
+        redactEvents(data,actor);return data;
+    }
+    @SuppressWarnings("unchecked")
+    private void redactEvents(Map<String,Object> data,UUID actor){
+        for(var e:(List<Map<String,Object>>)data.getOrDefault("events",List.of())){
+            var details=(Map<String,Object>)e.get("details");if(details==null)continue;
+            if(!actor.toString().equals(e.get("targetId"))){details.remove("armorReduction");details.remove("shieldReduction");}
+            if(!actor.toString().equals(e.get("actorId"))){details.remove("weapon");details.remove("item");details.remove("quantity");}
+        }
     }
 
     public boolean engaged(UUID user){return forActor(user)!=null;}
@@ -104,6 +132,7 @@ public class BattleService {
         out.put("round",b.round());out.put("turnAccountId",b.turn());out.put("turnPoints",b.points());out.put("turnDeadline",b.deadline());
         out.put("attackUsed",b.attackUsed());out.put("actors",actors);out.put("intents",intents);out.put("events",events);out.put("edges",edges(b));out.put("turnStartEdge",b.turnStartEdge());
         out.put("actionOptions",actionOptions(viewer));
+        var stateMap=new LinkedHashMap<UUID,Object>();for(var p:positions(b.id()))stateMap.put(p.id(),statuses.list(p.id()));out.put("statuses",stateMap);
         return out;
     }
     private List<String> actions(CharacterService.Character c,EquipmentService.Loadout l){
@@ -144,6 +173,7 @@ public class BattleService {
         event(id,"start",actor,target,null,null,now);
         for(UUID participant:participants)db.update("insert into battle_members values(?,?) on conflict do nothing",id,participant);
         loot.enterBattle(id,version,a.q(),a.r());
+        if(tickStatuses(id,participants.getFirst(),now))advanceTurn(byId(id),0,Set.of(),now);
         return id;
     }
 
@@ -199,7 +229,8 @@ public class BattleService {
             (rs,n)->{int q=rs.getInt(3),r=rs.getInt(4);String cells=rs.getString(6);return new Intent(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),q,r,rs.getString(5),cells==null?List.of(new WorldMap.Hex(q,r)):List.of(json.readValue(cells,WorldMap.Hex[].class)),rs.getString(7),rs.getInt(8),rs.getInt(9),rs.getInt(10),rs.getString(11),(Integer)rs.getObject(12),(Integer)rs.getObject(13),rs.getString(14),rs.getBoolean(15));},battle);
     }
     private boolean retains(Intent i,WorldMap.Hex next){return WeaponRules.retainsAttack(i.moveRule(),i.minRange(),i.maxRange(),i.cells(),i.originQ()==null?null:new WorldMap.Hex(i.originQ(),i.originR()),next);}
-    private void resolve(UUID battle,Intent intent,long now){
+    private void resolve(UUID battle,Intent intent,long now,String trigger){
+        event(battle,"attack-trigger",intent.attackerId(),null,intent.q(),intent.r(),now);detailLast(battle,Map.of("trigger",trigger));
         // Remove first: damage can down/kill an actor and cancel its other pending actions.
         if(db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,intent.attackerId())==0)return;
         boolean hit=false;
@@ -233,6 +264,8 @@ public class BattleService {
                     }
                 }else if(d.effect().equals("heal_self")){
                     if(profile.alive()&&profile.hp()<profile.maxHp())targets.add(actor);
+                }else if(d.effect().equals("cure_self")){
+                    if(statuses.has(actor,"poison"))targets.add(actor);
                 }else if(d.effect().equals("aimed_projectile")&&(own==null||!own.kind().equals("aim")||!own.ready())){
                     if(reason==null)reason="需在瞄准后的下一次行动射击";
                 }else for(var p:participants){
@@ -245,7 +278,7 @@ public class BattleService {
                     if(valid)targets.add(p.id());
                 }
             }
-            if(reason==null&&targets.isEmpty()&&cells.isEmpty())reason=d.effect().equals("heal_self")?"生命已满":"没有符合条件的目标";
+            if(reason==null&&targets.isEmpty()&&cells.isEmpty())reason=d.effect().equals("heal_self")?"生命已满":d.effect().equals("cure_self")?"当前没有中毒":"没有符合条件的目标";
             result.add(new ActionOption(d,reason,List.copyOf(targets),List.copyOf(cells)));
         }
         return List.copyOf(result);
@@ -262,20 +295,28 @@ public class BattleService {
             db.update("insert into battle_intents(encounter_id,attacker_id,q,r,visibility,cells,weapon,damage,min_range,max_range,move_rule,origin_q,origin_r,intent_kind,ready) values(?,?,?,?,'public',?,?,?,?,?,?,?,?,'aim',false)",b.id(),actor,q,r,json.writeValueAsString(cells),w.code(),d.damage(),w.minRange(),w.maxRange(),w.moveRule(),from.q(),from.r());
             characters.hostile(actor);event(b.id(),"aim",actor,null,q,r,now);
         }else{
-            if(d.effect().equals("heal_self"))target=actor;
+            if(d.effect().equals("heal_self")||d.effect().equals("cure_self"))target=actor;
             if(target==null||!option.targets().contains(target))throw bad("目标已不满足这个动作的条件");
             var to=position(b.id(),target);
             switch(d.effect()){
+                case "cure_self" -> {equipment.consume(actor,d.item(),1);statuses.remove(actor,"poison");event(b.id(),"status-cured",actor,actor,to.q(),to.r(),now);}
                 case "heal_self" -> {var c=characters.get(actor);int healed=Math.min(d.damage(),c.maxHp()-c.hp());equipment.consume(actor,d.item(),1);characters.heal(actor,d.damage());event(b.id(),"potion",actor,actor,to.q(),to.r(),now,healed,null);}
                 case "interrupt_intent" -> {cancelIntent(b.id(),target,"interrupted",now);characters.hostile(actor);event(b.id(),"interrupt",actor,target,to.q(),to.r(),now);}
                 case "projectile","aimed_projectile" -> {
                     equipment.consume(actor,d.item(),1);
                     if(d.effect().equals("aimed_projectile"))db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
-                    characters.hostile(actor);hit(b.id(),actor,target,to.q(),to.r(),d.damage(),now);
+                    event(b.id(),"attack-trigger",actor,target,to.q(),to.r(),now);detailLast(b.id(),Map.of("trigger",d.name(),"item",d.item()));
+                    characters.hostile(actor);int applied=hit(b.id(),actor,target,to.q(),to.r(),d.damage(),now);
+                    String status=equipment.ammoStatus(d.item());
+                    if(applied>0&&status!=null&&!Set.of("dead","soul").contains(characters.get(target).life())){
+                        boolean refreshed=statuses.apply(target,status,actor);event(b.id(),refreshed?"status-refreshed":"status-added",actor,target,to.q(),to.r(),now);
+                    }
                 }
                 default -> throw bad("尚未支持这个动作效果");
             }
         }
+        event(b.id(),"action-cost",actor,null,null,null,now);
+        detailLast(b.id(),Map.of("action",d.name(),"actionPoints",d.cost(),"item",Objects.requireNonNullElse(d.item(),""),"quantity",d.item()==null?0:1));
         db.update("update battle_encounters set turn_points=turn_points-? where id=?",d.cost(),b.id());
         if(!finishIfNeeded(b.id(),now)&&b.points()==d.cost())advanceTurn(b,from.initiative(),online,now);
     }
@@ -296,13 +337,13 @@ public class BattleService {
                 if(intent.kind().equals("aim"))continue;
                 boolean leavingMarkedCell=!intent.attackerId().equals(actor)&&intent.cells().contains(new WorldMap.Hex(currentQ,currentR));
                 boolean attackerLeavesRange=intent.attackerId().equals(actor)&&!retains(intent,next);
-                if(leavingMarkedCell||attackerLeavesRange)resolve(b.id(),intent,now);
+                if(leavingMarkedCell||attackerLeavesRange)resolve(b.id(),intent,now,leavingMarkedCell?"目标离开预设格":"攻击者移动离开维持范围");
             }
             if(!characters.get(actor).alive())break;
             spent++;
             if(db.update("delete from battle_intents where encounter_id=? and attacker_id=? and intent_kind='aim'",b.id(),actor)>0)event(b.id(),"aim-cancel",actor,null,null,null,now);
             db.update("update battle_actors set q=?,r=? where encounter_id=? and account_id=?",next.q(),next.r(),b.id(),actor);
-            event(b.id(),"move",actor,null,next.q(),next.r(),now);
+            event(b.id(),"move",actor,null,next.q(),next.r(),now);detailLast(b.id(),Map.of("actionPoints",1));
             currentQ=next.q();currentR=next.r();
         }
         db.update("update battle_encounters set turn_points=turn_points-? where id=?",spent,b.id());
@@ -330,7 +371,7 @@ public class BattleService {
         }
         db.update("insert into battle_intents(encounter_id,attacker_id,target_id,q,r,visibility,cells,weapon,damage,min_range,max_range,move_rule,origin_q,origin_r) values(?,?,null,?,?,'public',?,?,?,?,?,?,?,?)",b.id(),actor,q,r,json.writeValueAsString(cells),weapon.code(),weapon.damage(),weapon.minRange(),weapon.maxRange(),weapon.moveRule(),from.q(),from.r());
         db.update("update battle_encounters set turn_points=turn_points-?,attack_used=true where id=?",weapon.cost(),b.id());
-        event(b.id(),"mark",actor,null,q,r,now);
+        event(b.id(),"mark",actor,null,q,r,now);detailLast(b.id(),Map.of("actionPoints",weapon.cost(),"weapon",weapon.name()));
         if(b.points()==weapon.cost())advanceTurn(b,from.initiative(),online,now);
     }
     public void endTurn(UUID actor,Set<UUID> online,long now){
@@ -361,6 +402,10 @@ public class BattleService {
             round,next.id(),characters.get(next.id()).alive()?TURN_POINTS:0,now+turnMillis,exit(next.q(),next.r()),b.id());
         db.update("update battle_actors set reaction_points=0,shield_raised=false where encounter_id=? and account_id=?",b.id(),next.id());
         event(b.id(),"turn",next.id(),null,null,null,now);
+        if(tickStatuses(b.id(),next.id(),now)){
+            if(!finishIfNeeded(b.id(),now))advanceTurn(byId(b.id()),next.initiative(),online,now);
+            return;
+        }
         Integer withdrawal=db.queryForObject("select withdraw_direction from battle_actors where encounter_id=? and account_id=?",Integer.class,b.id(),next.id());
         if(withdrawal!=null){
             if(depart(next.id(),byId(b.id()),withdrawal,online,now))return;
@@ -372,22 +417,47 @@ public class BattleService {
             if(intent.kind().equals("aim")){
                 db.update("update battle_intents set ready=true where encounter_id=? and attacker_id=?",b.id(),next.id());
                 event(b.id(),"aim-ready",next.id(),null,intent.q(),intent.r(),now);
-            }else if(online.contains(next.id())||characters.get(next.id()).npc())resolve(b.id(),intent,now);
+            }else if(online.contains(next.id())||characters.get(next.id()).npc())resolve(b.id(),intent,now,"攻击者下一次行动开始");
             else{
                 event(b.id(),"cancel",next.id(),null,intent.q(),intent.r(),now);
                 db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),next.id());
             }
         }
     }
-    private void hit(UUID battle,UUID attacker,UUID target,int q,int r,int damage,long now){
+    private boolean tickStatuses(UUID battle,UUID actor,long now){
+        for(var status:statuses.list(actor)){
+            String result=characters.damage(actor,status.damage(),now);
+            event(battle,"status-tick",status.sourceId(),actor,null,null,now,status.damage(),0);
+            if(result.equals("death")){
+                event(battle,"status-death",status.sourceId(),actor,null,null,now);
+                db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,actor);
+                db.update("delete from battle_actors where encounter_id=? and account_id=?",battle,actor);
+                return true;
+            }
+            statuses.elapsed(actor,status.code());
+            if(!statuses.has(actor,status.code()))event(battle,"status-expired",actor,actor,null,null,now);
+            if(result.equals("down")){
+                db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,actor);
+                event(battle,"down",status.sourceId(),actor,null,null,now);
+            }
+        }
+        if(!characters.get(actor).alive())db.update("update battle_encounters set turn_points=0 where id=?",battle);
+        return false;
+    }
+    private int hit(UUID battle,UUID attacker,UUID target,int q,int r,int damage,long now){
+        var defense=characters.loadout(target);
+        int afterArmor=Math.max(1,damage-defense.armor());
         int effective=effectiveDamage(battle,target,damage);
+        var priorStatuses=statuses.list(target);
         String result=effective<=0?"hit":characters.damage(target,effective,now);
-        if(result.equals("protected"))return;
+        if(result.equals("protected"))return 0;
         if(result.equals("down")||result.equals("death")){db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,target);event(battle,result,attacker,target,q,r,now);}
-        if(result.equals("death"))db.update("delete from battle_actors where encounter_id=? and account_id=?",battle,target);
+        if(result.equals("death")){db.update("delete from battle_actors where encounter_id=? and account_id=?",battle,target);for(var s:priorStatuses){event(battle,"status-removed",attacker,target,q,r,now);detailLast(battle,Map.of("status",s.name(),"reason","死亡"));}}
         event(battle,"attack",attacker,target,q,r,now,effective,Math.max(0,damage-effective));
+        detailLast(battle,Map.of("baseDamage",damage,"attributeBonus",0,"armorReduction",Math.max(0,damage-afterArmor),"shieldReduction",Math.max(0,afterArmor-effective),"finalDamage",effective,"weapon",characters.weapon(attacker).name()));
         if(db.update("update battle_actors set withdraw_direction=null where encounter_id=? and account_id=? and withdraw_direction is not null",battle,target)>0)
             event(battle,"withdraw-interrupted",target,attacker,q,r,now);
+        return effective;
     }
     private int effectiveDamage(UUID battle,UUID target,int damage){
         if(damage<=0)return 0;
@@ -430,7 +500,7 @@ public class BattleService {
         equipment.consume(actor,"bandage",1);
         characters.heal(target,4);
         db.update("update battle_encounters set turn_points=turn_points-2 where id=?",b.id());
-        event(b.id(),"bandage",actor,target,t.q(),t.r(),now,Math.min(4,targetProfile.maxHp()-targetProfile.hp()),null);
+        event(b.id(),"bandage",actor,target,t.q(),t.r(),now,Math.min(4,targetProfile.maxHp()-targetProfile.hp()),null);detailLast(b.id(),Map.of("actionPoints",2,"item","bandage","quantity",1));
         if(b.points()==2)advanceTurn(b,a.initiative(),online,now);
     }
     public void equip(UUID actor,String main,String off,Set<UUID> online,long now){
@@ -442,7 +512,7 @@ public class BattleService {
         db.update("update battle_encounters set turn_points=turn_points-2 where id=?",b.id());
         db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
         db.update("update battle_actors set reaction_points=0,shield_raised=false where encounter_id=? and account_id=?",b.id(),actor);
-        event(b.id(),"equip",actor,null,null,null,now);
+        event(b.id(),"equip",actor,null,null,null,now);detailLast(b.id(),Map.of("actionPoints",2));
         if(b.points()==2)advanceTurn(b,position(b.id(),actor).initiative(),online,now);
     }
     public void withdraw(UUID actor,int direction,boolean force,Set<UUID> online,long now){
@@ -536,7 +606,11 @@ public class BattleService {
         var weapon=characters.weapon(own.id());
         var projectile=equipment.projectile(weapon.code());
         boolean ranged=projectile!=null;
-        if(ranged&&!equipment.has(own.id(),projectile.ammoCode())){
+        String behavior=db.queryForObject("select behavior from characters where id=?",String.class,own.id());
+        int healThreshold=behavior.equals("cautious")?9:behavior.equals("aggressive")?3:6;
+        double dangerWeight=behavior.equals("cautious")?3:behavior.equals("aggressive")?0.5:2;
+        boolean lowAndOut=characters.get(own.id()).hp()<=(behavior.equals("cautious")?4:behavior.equals("aggressive")?1:2)&&!equipment.has(own.id(),"healing_potion")&&!equipment.has(own.id(),"bandage");
+        if(ranged&&!equipment.has(own.id(),equipment.selectedAmmo(own.id(),projectile.ammoCode()))||lowAndOut){
             var exits=edges(b);
             for(int direction:sides(own.q(),own.r()))if(exits.get(direction).walkable()){
                 withdraw(own.id(),direction,b.turnStartEdge()&&b.points()==6,online,now);return;
@@ -556,7 +630,8 @@ public class BattleService {
             for(UUID targetId:available.targets()){
                 if(!targetId.equals(own.id())&&targets.stream().noneMatch(t->t.id().equals(targetId)))continue;
                 var t=position(b.id(),targetId);double score=switch(definition.effect()){
-                    case "heal_self"->characters.get(own.id()).hp()<=6?18:0;
+                    case "heal_self"->characters.get(own.id()).hp()<=healThreshold?18:0;
+                    case "cure_self"->behavior.equals("aggressive")?9:19;
                     case "aimed_projectile"->20;
                     case "interrupt_intent"->12;
                     default->ranged?10:5;
@@ -580,13 +655,13 @@ public class BattleService {
                 if(score>0)options.add(new MonsterBrain.Option("attack",aim,score));
             }
         }
-        if(b.points()>=2){var self=characters.get(own.id());if(self.hp()<self.maxHp()&&equipment.has(own.id(),"bandage"))options.add(new MonsterBrain.Option("heal",from,self.hp()*2<=self.maxHp()?14:6));}
+        if(b.points()>=2){var self=characters.get(own.id());if(self.hp()<self.maxHp()&&equipment.has(own.id(),"bandage"))options.add(new MonsterBrain.Option("heal",from,self.hp()<=healThreshold?14:behavior.equals("aggressive")?0:6));}
         if(b.points()>0)for(var next:from.neighbors())if(within(next.q(),next.r())&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
             double score=0;int nearest=targets.stream().mapToInt(p->distance(next.q(),next.r(),p.q(),p.r())).min().orElse(20),before=targets.stream().mapToInt(p->distance(from.q(),from.r(),p.q(),p.r())).min().orElse(20);
-            score+=(ranged?(Math.abs(before-3)-Math.abs(nearest-3)):(before-nearest))*2-0.4;
+            score+=(ranged?(Math.abs(before-(behavior.equals("cautious")?4:3))-Math.abs(nearest-(behavior.equals("cautious")?4:3))):(before-nearest))*2-0.4;
             if(pending!=null&&pending.kind().equals("aim"))score-=12;
             if(pending!=null&&pending.kind().equals("melee")&&!retains(pending,next)&&targets.stream().anyMatch(t->pending.cells().contains(new WorldMap.Hex(t.q(),t.r()))))score+=10;
-            for(var i:intents(b.id()))if(i.kind().equals("melee")&&!i.attackerId().equals(own.id())&&i.cells().contains(from))score-=i.damage()*2;
+            for(var i:intents(b.id()))if(i.kind().equals("melee")&&!i.attackerId().equals(own.id())&&i.cells().contains(from))score-=i.damage()*dangerWeight;
             if(b.points()<=2&&pending==null&&nearest>1)score-=1;
             options.add(new MonsterBrain.Option("move",next,score));
         }

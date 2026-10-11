@@ -27,6 +27,15 @@ public class EquipmentService {
     }
     public List<Map<String,Object>> catalog(){return db.queryForList("select * from item_definitions order by code");}
     public record Projectile(String ammoCode,int aimCost,int aimDamage) {}
+    public String selectedAmmo(UUID actor,String family){
+        String selected=db.queryForObject("select selected_ammo from characters where id=?",String.class,actor);
+        return Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from item_definitions where code=? and ammo_family=?)",Boolean.class,selected,family))?selected:family;
+    }
+    public void selectAmmo(UUID actor,String code){
+        if(!Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from item_definitions where code=? and ammo_family='arrow')",Boolean.class,code)))throw AccountService.bad("不兼容的弹药");
+        db.update("update characters set selected_ammo=? where id=?",code,actor);
+    }
+    public String ammoStatus(String code){return db.queryForObject("select applied_status from item_definitions where code=?",String.class,code);}
     public Projectile projectile(String code){return db.query("select ammo_code,aim_cost,aim_damage from item_definitions where code=? and ammo_code is not null",(r,n)->new Projectile(r.getString(1),r.getInt(2),r.getInt(3)),code).stream().findFirst().orElse(null);}
     public Loadout loadout(UUID id){
         var row=db.queryForMap("select weapon,offhand,body from characters where id=?",id);

@@ -37,6 +37,7 @@ public class LootService {
         if(!c.npc())return;
         UUID id=UUID.randomUUID();
         db.update("insert into loot_containers(id,kind,name,source_kind,source_id,world_version,q,r,created_at,expires_at,strength,agility,constitution,intellect,perception,willpower) values(?,'corpse',?,'monster',?,?,?,?,?,?,?,?,?,?,?,?)",id,c.name()+"的尸体",c.id(),version,c.q(),c.r(),now,now+GROUND_LIFETIME,c.strength(),c.agility(),c.constitution(),c.intellect(),c.perception(),c.willpower());
+        db.update("update loot_containers set source_species=? where id=?",c.species(),id);
         db.update("update loot_containers c set battle_id=a.encounter_id,battle_q=a.q,battle_r=a.r from battle_actors a join battle_encounters b on b.id=a.encounter_id where c.id=? and a.account_id=? and b.active=true",id,c.id());
         // 生物背包物品随尸体掉落；装备的武器也一并进入尸体供玩家拾取。
         for(var row:db.queryForList("select item_code,quantity from inventories where character_id=? and quantity>0",c.id()))

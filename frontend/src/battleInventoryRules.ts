@@ -1,5 +1,5 @@
 import type {BattleActor,Item} from './types';
-export function itemSupported(item:Item){return ['bandage','potion','throw-stone'].includes(item.use_action??'')&&(item.target_mode==='character'||item.target_mode==='self');}
+export function itemSupported(item:Item){return ['bandage','potion','throw-stone','antidote'].includes(item.use_action??'')&&(item.target_mode==='character'||item.target_mode==='self');}
 export function targetReason(item:Item,own:BattleActor,target:BattleActor|undefined){
  if(!itemSupported(item))return '该道具暂未开放使用';
  if(!target)return '请选择范围内的角色';

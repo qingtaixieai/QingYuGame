@@ -79,6 +79,11 @@ public class HotbarService {
             }
             available.add(new Action(a.id(),a.source(),a.name(),a.icon(),a.command(),a.description(),cost,a.costKind(),a.quantity(),reason));
         }
+        for(var slot:saved.layout().slots())if(slot.locked()&&slot.actionRef()!=null&&slot.source().equals("item")&&available.stream().noneMatch(a->a.id().equals(slot.actionRef()))){
+            String code=switch(slot.actionRef()){case "potion"->"healing_potion";case "throw-stone"->"stone";default->slot.actionRef();};
+            var rows=db.queryForList("select name,description,attack_cost,use_action from item_definitions where code=?",code);
+            if(!rows.isEmpty()){var row=rows.getFirst();available.add(new Action(slot.actionRef(),"item",(String)row.get("name"),(String)row.get("use_action"),(String)row.get("use_action"),(String)row.get("description"),((Number)row.get("attack_cost")).intValue(),"action",0L,"道具已耗尽"));}
+        }
         return new State(saved.revision(),saved.layout().slots(),available);
     }
     private static int distance(BattleService.Actor a,BattleService.Actor b){return WeaponRules.distance(new WorldMap.Hex(a.q(),a.r()),new WorldMap.Hex(b.q(),b.r()));}

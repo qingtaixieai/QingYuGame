@@ -29,6 +29,14 @@ public class GameController {
     record LifeRequest(String action,UUID targetId) {}
     record ActionRequest(UUID battleId,String actionId,UUID targetId,Integer q,Integer r) {}
     record SkillRequest(String code,boolean granted) {}
+    record AmmoRequest(String code) {}
+    record BehaviorRequest(String behavior) {}
+    @GetMapping("/admin/characters/{id}/behavior") public Object behavior(@PathVariable UUID id,HttpServletRequest req){accounts.require(req,true,true);return world.behavior(id);}
+    @PostMapping("/admin/characters/{id}/behavior") public Object behavior(@PathVariable UUID id,@RequestBody BehaviorRequest body,HttpServletRequest req){world.behavior(accounts.require(req,true,true).id(),id,body.behavior());return Map.of("message","倾向已更新");}
+    @GetMapping("/shop") public Object shop(HttpServletRequest req){return world.shop(accounts.require(req,true,false).id());}
+    @PostMapping("/shop/trade") public Object trade(@RequestBody ShopService.Order body,HttpServletRequest req){return world.trade(accounts.require(req,true,false).id(),body);}
+    @GetMapping("/character/status") public Object status(HttpServletRequest req){return world.status(accounts.require(req,true,false).id());}
+    @PostMapping("/character/ammo") public Object ammo(@RequestBody AmmoRequest body,HttpServletRequest req){world.selectAmmo(accounts.require(req,true,false).id(),body.code());return Map.of("message","弹药已选择");}
     @PostMapping("/battle/action") public Object action(@RequestBody ActionRequest body,HttpServletRequest req){world.battleAction(accounts.require(req,true,false).id(),body.battleId(),body.actionId(),body.targetId(),body.q(),body.r());return Map.of("message","行动完成");}
     @GetMapping("/admin/characters") public Object characters(HttpServletRequest req){accounts.require(req,true,true);return world.adminCharacters();}
     @GetMapping("/admin/characters/{id}/skills") public Object skills(@PathVariable UUID id,HttpServletRequest req){accounts.require(req,true,true);return world.learnedSkills(id);}

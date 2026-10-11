@@ -14,10 +14,10 @@ public final class ActionSlots {
     }
     public static Layout reconcile(Layout old,Map<String,String> owned){
         var slots=new ArrayList<Slot>();
-        for(var s:old.slots())slots.add(new Slot(s.source(),s.index(),s.actionRef()!=null&&owned.containsKey(s.actionRef())?s.actionRef():null,s.locked()));
+        for(var s:old.slots())slots.add(new Slot(s.source(),s.index(),s.actionRef()!=null&&(owned.containsKey(s.actionRef())||s.locked()&&s.source().equals("item"))?s.actionRef():null,s.locked()));
         for(String source:SOURCES)if(slots.stream().noneMatch(s->s.source().equals(source)))
             for(int i=0;i<6;i++)slots.add(new Slot(source,i,null,false));
-        for(var entry:owned.entrySet())if(!old.known().contains(entry.getKey())){
+        for(var entry:owned.entrySet())if(!old.known().contains(entry.getKey())&&slots.stream().noneMatch(s->entry.getKey().equals(s.actionRef()))){
             int index=-1;
             for(int i=0;i<slots.size();i++){var s=slots.get(i);if(s.source().equals(entry.getValue())&&!s.locked()&&s.actionRef()==null){index=i;break;}}
             if(index<0){int next=(int)slots.stream().filter(s->s.source().equals(entry.getValue())).count();slots.add(new Slot(entry.getValue(),next,entry.getKey(),false));}

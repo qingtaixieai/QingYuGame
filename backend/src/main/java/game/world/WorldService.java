@@ -29,6 +29,11 @@ public class WorldService {
     private final CharacterService characters;private final EquipmentService equipment;
     private final BattleService battles;private final FerryService ferry;private final HotbarService hotbar;
     private final LootService loot;private final SkillService skills;
+    @org.springframework.beans.factory.annotation.Autowired private StatusService statuses;
+    @org.springframework.beans.factory.annotation.Autowired private ShopService shops;
+    private void requireShop(UUID id){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中不能交易");if(routes.containsKey(id))throw AccountService.bad("请先停下");var tile=world.index().get(characters.get(id).hex());if(tile==null||tile.place()==null||!tile.place().type().equals("town"))throw AccountService.bad("请先到达城镇");}
+    public synchronized Object shop(UUID id){requireShop(id);return shops.view(id);}
+    public synchronized Object trade(UUID id,ShopService.Order order){requireShop(id);var result=tx.execute(s->{var out=shops.transact(id,order);hotbar.sync(id);return out;});battleRevision++;broadcast();return result;}
     WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment,HotbarService hotbar,LootService loot,SkillService skills){this.skills=skills;this.loot=loot;this.hotbar=hotbar;this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
     @PostConstruct void load(){
         var rows=db.queryForList("select document from worlds where id=1",String.class);
@@ -64,7 +69,7 @@ public class WorldService {
         out.put("loot",soul?List.of():loot.ground(world.version(),System.currentTimeMillis()));
         if(viewing!=null){out.put("character",viewing);out.put("inventory",resources.inventory(viewer));out.put("carriedCorpses",loot.carried(viewer));}return out;
     }
-    public synchronized AccountService.Account register(String name,String pass){var a=accounts.register(name,pass,world.spawn());characters.ensurePlayers();return a;}
+    public synchronized AccountService.Account register(String name,String pass){return tx.execute(s->{var a=accounts.register(name,pass,world.spawn());characters.ensurePlayers();equipment.give(a.id(),"copper_coin",30);return a;});}
     public synchronized List<WorldMap.Hex> move(UUID id,int q,int r,String version){
         if(!world.version().equals(version))throw AccountService.bad("世界已更新，请刷新地图后重试");
         AccountService.Account a=accounts.get(id);
@@ -194,8 +199,8 @@ public class WorldService {
     private void requireBattle(UUID actor,UUID battleId){
         if(battleId==null||!battleId.equals(battles.currentId(actor)))throw AccountService.bad("战斗已变化，请刷新战场");
     }
-    public synchronized Object battleReport(UUID actor){return battles.report(actor);}
-    public synchronized Object currentBattle(UUID actor){return battles.current(actor,onlineUsers());}
+    public synchronized Object battleReport(UUID actor){return battles.publicReport(actor);}
+    public synchronized Object currentBattle(UUID actor){return battles.publicCurrent(actor,onlineUsers());}
     public synchronized HotbarService.State hotbar(UUID actor){return tx.execute(s->hotbar.state(actor,battles.current(actor,onlineUsers())));}
     public synchronized HotbarService.State editHotbar(UUID actor,HotbarService.Edit edit){
         var result=tx.execute(s->{hotbar.edit(actor,edit);return hotbar.state(actor,battles.current(actor,onlineUsers()));});
@@ -310,6 +315,8 @@ public class WorldService {
         if(changed)battles.actorIds().forEach(id->{routes.remove(id);resources.cancel(id);characters.cancelTimer(id);});return changed;
     }
     public synchronized CharacterService.Character character(UUID id){return characters.get(id);}
+    public synchronized Object status(UUID id){return Map.of("statuses",statuses.list(id),"paused",!battles.engaged(id),"selectedAmmo",equipment.selectedAmmo(id,"arrow"));}
+    public synchronized void selectAmmo(UUID id,String code){characters.requireAlive(id);tx.executeWithoutResult(s->equipment.selectAmmo(id,code));battleRevision++;broadcast();}
     public synchronized List<Map<String,Object>> catalog(){return equipment.catalog();}
     public synchronized void equip(UUID id,String code){equip(id,code,null);}
     public synchronized void equip(UUID id,String main,String off){equip(id,main,off,characters.loadout(id).body());}
@@ -328,6 +335,7 @@ public class WorldService {
                 ferry.requireAshore(id);
                 if(routes.containsKey(id))throw AccountService.bad("请先停下");
                 switch(action){
+                    case "antidote" -> {characters.requireAlive(id);if(!statuses.has(id,"poison"))throw AccountService.bad("当前没有中毒");equipment.consume(id,"antidote",1);statuses.remove(id,"poison");}
                     case "bind" -> characters.bind(id);
                     case "rest","recall" -> {resources.cancel(id);characters.begin(id,action,now);}
                     case "revive" -> {characters.returnToMark(id,now);battles.rejoinAtCell(id,now);}
@@ -348,6 +356,8 @@ public class WorldService {
     public synchronized void battleEquip(UUID actor,String main,String off,String body){UUID battleId=battles.currentId(actor);requireBattle(actor,battleId);tx.executeWithoutResult(s->{battles.equip(actor,main,off,body,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);});battleRevision++;broadcast();}
     public synchronized void battleAction(UUID actor,UUID battleId,String action,UUID target,Integer q,Integer r){requireBattle(actor,battleId);tx.executeWithoutResult(s->{battles.action(actor,action,target,q,r,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);});battleRevision++;broadcast();}
     public synchronized Object adminCharacters(){return characters.all();}
+    public synchronized Object behavior(UUID id){if(!characters.get(id).npc())throw AccountService.bad("仅NPC可设置行为倾向");return Map.of("behavior",db.queryForObject("select behavior from characters where id=?",String.class,id));}
+    public synchronized void behavior(UUID admin,UUID id,String value){behavior(id);if(!Set.of("balanced","aggressive","cautious").contains(Objects.requireNonNullElse(value,"")))throw AccountService.bad("未知倾向");tx.executeWithoutResult(s->{db.update("update characters set behavior=? where id=?",value,id);audit(admin,"behavior",id+":"+value);});}
     public synchronized Object learnedSkills(UUID id){characters.get(id);return skills.learned(id);}
     public synchronized void grantSkill(UUID admin,UUID target,String code,boolean granted){characters.get(target);tx.executeWithoutResult(s->{skills.set(target,code,granted);if(!characters.get(target).npc())hotbar.sync(target);audit(admin,"skill",target+":"+code+":"+granted);});battleRevision++;broadcast();}
     private void broadcast(){

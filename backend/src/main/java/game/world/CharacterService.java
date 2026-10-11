@@ -47,10 +47,11 @@ public class CharacterService {
         db.update("delete from inventories where character_id=?",id);
         if("archer".equals(c.species())){
             db.update("update characters set weapon='short_bow',offhand=null,body='light_armor' where id=?",id);
-            give(id,"arrow",12);give(id,"healing_potion",1);return;
+            give(id,"arrow",12);give(id,"healing_potion",1);give(id,"copper_coin",java.util.concurrent.ThreadLocalRandom.current().nextInt(3,9));return;
         }
         var rnd=new java.security.SecureRandom();
         if(c.bully()){
+            give(id,"copper_coin",5+rnd.nextInt(6));
             db.update("update characters set weapon='axe',offhand=null where id=?",id);
             give(id,"stone",1+rnd.nextInt(4));give(id,"wood",1+rnd.nextInt(4));
         }else{
@@ -91,6 +92,7 @@ public class CharacterService {
     public void die(UUID id,long now){
         var c=get(id);if(c.life.equals("soul")||c.life.equals("dead"))return;
         loot.createCorpse(c,world.version(),now);
+        db.update("delete from character_statuses where character_id=?",id);
         db.update("update characters set life=?,hp=0,down_hp=0,death_q=?,death_r=?,timer_kind=?,timer_end=?,protected_until=0,saved_at=? where id=?",c.npc()?"dead":"soul",c.q,c.r,c.npc()?"respawn":null,c.npc()?now+respawnMs:0,now,id);
         db.update("delete from world_actions where account_id=?",id);db.update("delete from ferry_passengers where account_id=?",id);
         if(!c.npc())relocate(id,c.bindQ,c.bindR);

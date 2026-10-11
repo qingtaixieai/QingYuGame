@@ -18,8 +18,8 @@ class ActionSlotsTest {
     }
     @Test void locksSurviveOwnershipLossAndNewActionsSkipLockedSlots(){
         var owned=owned();var l=ActionSlots.reconcile(ActionSlots.empty(),owned);l=ActionSlots.edit(l,"lock",12,null,null,owned);
-        owned.remove("bandage");l=ActionSlots.reconcile(l,owned);assertNull(l.slots().get(12).actionRef());assertTrue(l.slots().get(12).locked());
-        owned.put("bandage","item");l=ActionSlots.reconcile(l,owned);assertEquals("bandage",l.slots().get(13).actionRef());assertNull(l.slots().get(12).actionRef());
+        owned.remove("bandage");l=ActionSlots.reconcile(l,owned);assertEquals("bandage",l.slots().get(12).actionRef());assertTrue(l.slots().get(12).locked());
+        owned.put("bandage","item");l=ActionSlots.reconcile(l,owned);assertEquals("bandage",l.slots().get(12).actionRef());assertNull(l.slots().get(13).actionRef());
     }
     @Test void cannotEditLockedOrInvalidSlotsOrDuplicateOrCrossSource(){
         var owned=owned();var l=ActionSlots.reconcile(ActionSlots.empty(),owned);var locked=ActionSlots.edit(l,"lock",0,null,null,owned);

@@ -21,11 +21,13 @@ public class CombatActions {
         if(loadout.canGuard())out.add(new Definition("guard:"+loadout.offHand(),"weapon","举盾","legacy:guard",1,0,0,0,null,"将最多2行动点转为反应点；举盾额外减伤"+loadout.guardReduction()+"。"));
         if(equipment.has(actor,"bandage"))out.add(new Definition("bandage","item","绷带","legacy:bandage",2,4,0,1,"bandage","消耗1绷带，治疗自己或相邻站立角色4生命。"));
         if(projectile!=null&&loadout.canAttack()){
-            out.add(new Definition("quick-shot","weapon","速射","projectile",weapon.cost(),weapon.damage(),weapon.minRange(),weapon.maxRange(),projectile.ammoCode(),"立即射击一名角色；实际发射时消耗一支箭。"));
+            String ammo=equipment.selectedAmmo(actor,projectile.ammoCode());
+            out.add(new Definition("quick-shot","weapon","速射","projectile",weapon.cost(),weapon.damage(),weapon.minRange(),weapon.maxRange(),ammo,"立即射击一名角色；实际发射时消耗选中的一支箭。"));
             out.add(new Definition("aim","weapon","瞄准","aim",projectile.aimCost(),projectile.aimDamage(),weapon.minRange(),weapon.maxRange(),null,"预设中心及周围一圈；下次自己的行动可选择一名目标射击。移动取消。"));
-            out.add(new Definition("aimed-shot","weapon","瞄准射击","aimed_projectile",0,projectile.aimDamage(),0,99,projectile.ammoCode(),"瞄准就绪后，从区域内选择一名角色射击，不额外花行动点。"));
+            out.add(new Definition("aimed-shot","weapon","瞄准射击","aimed_projectile",0,projectile.aimDamage(),0,99,ammo,"瞄准就绪后，从区域内选择一名角色射击，不额外花行动点。"));
         }
         if(equipment.has(actor,"healing_potion"))out.add(new Definition("potion","item","治疗药水","heal_self",1,6,0,0,"healing_potion","恢复自身6点生命。"));
+        if(equipment.has(actor,"antidote"))out.add(new Definition("antidote","item","解毒药","cure_self",1,0,0,0,"antidote","清除自身中毒，不恢复生命。"));
         if(equipment.has(actor,"stone"))out.add(new Definition("throw-stone","item","投掷石头","projectile",2,2,1,2,"stone","消耗一块石头，立即攻击两格内的一名角色。"));
         for(var s:skills.learned(actor))out.add(new Definition("skill:"+s.code(),"skill",s.name(),s.effect(),s.cost(),0,s.minRange(),s.maxRange(),null,s.description()));
         return List.copyOf(out);
