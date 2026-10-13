@@ -17,8 +17,11 @@ test('Self-only definition rejects another character and accepts self',()=>{
  const self={...item,target_mode:'self',use_range:0};
  assert.equal(targetReason(self,own,own),'');assert(targetReason(self,own,actor('other',0,0)));
 });
-test('Unknown consumables are not routed to bandage or arbitrary endpoints',()=>{
- assert(!itemSupported({...item,code:'potion'}));assert(!itemSupported({...item,use_action:'equipment'}));
+test('Consumables are supported by explicit action, not a bandage-only item code',()=>{
+ for(const use_action of ['bandage','potion','throw-stone','antidote'])assert(itemSupported({...item,code:'custom-item',use_action}));
+ assert(!itemSupported({...item,use_action:'equipment'}));
+ assert(!itemSupported({...item,use_action:undefined}));
+ assert(!itemSupported({...item,target_mode:'unknown'}));
 });
 const equipment=[{code:'axe',damage:3,max_range:1,passive_armor:0},{code:'spear',damage:3,max_range:2,passive_armor:0},{code:'buckler',hand_usage:'off_one',passive_armor:1},{code:'tower_shield',hand_usage:'off_two',passive_armor:2}];
 test('Comparison computes actual armor and range changes without unchanged tags',()=>{
