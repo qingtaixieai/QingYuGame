@@ -21,6 +21,8 @@ public class CharacterService {
     private final JdbcTemplate db;private final EquipmentService equipment;private final LootService loot;
     private final long recallMs,restMs,respawnMs,protectionMs;
     private WorldMap world;
+    private java.util.function.BiPredicate<WorldMap.Hex,WorldMap.Hex> passageOpen=(a,b)->true;
+    public void passages(java.util.function.BiPredicate<WorldMap.Hex,WorldMap.Hex> value){passageOpen=value;}
     private final Map<String,List<WorldMap.Hex>> roamCache=new HashMap<>();
     public static final UUID ISLAND_BEAST=UUID.fromString("a3347a88-6099-42bf-9d66-000000000001");
     CharacterService(JdbcTemplate db,EquipmentService equipment,LootService loot,@Value("${game.recall-ms:5000}") long recall,
@@ -138,7 +140,7 @@ public class CharacterService {
             if(c.life.equals("dead")&&c.timerEnd<=now){
                 if(c.deployed)continue; // 管理员投放的怪不重生，只留尸体
                 var occupied=new HashSet<>(all().stream().filter(x->!x.id.equals(c.id)&&!x.life.equals("soul")&&!x.life.equals("dead")).map(Character::hex).toList());var free=new ArrayList<>(area.stream().filter(h->!occupied.contains(h)).toList());if(free.isEmpty())continue;Collections.shuffle(free);var h=free.getFirst();relocate(c.id,h.q(),h.r());revive(c.id,now);kit(c.id);db.update("update characters set protected_until=0 where id=?",c.id);changed=true;}
-            else if(c.alive()&&db.queryForObject("select next_move from characters where id=?",Long.class,c.id)<=now){var options=new ArrayList<>(c.hex().neighbors().stream().filter(area::contains).toList());if(!options.isEmpty()){Collections.shuffle(options);var h=options.getFirst();relocate(c.id,h.q(),h.r());changed=true;}db.update("update characters set next_move=? where id=?",now+4000,c.id);}
+            else if(c.alive()&&db.queryForObject("select next_move from characters where id=?",Long.class,c.id)<=now){var options=new ArrayList<>(c.hex().neighbors().stream().filter(area::contains).filter(h->passageOpen.test(c.hex(),h)).toList());if(!options.isEmpty()){Collections.shuffle(options);var h=options.getFirst();relocate(c.id,h.q(),h.r());changed=true;}db.update("update characters set next_move=? where id=?",now+4000,c.id);}
         }return changed;
     }
     public void reset(WorldMap next,long now){world=next;db.update("delete from characters where kind<>'player'");db.update("update characters set life='alive',hp=max_hp,down_hp=max_down_hp,bind_q=?,bind_r=?,death_q=null,death_r=null,timer_kind=null,timer_end=0,protected_until=0",next.spawn().q(),next.spawn().r());initialize(next,now);}

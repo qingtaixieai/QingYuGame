@@ -24,13 +24,14 @@ public class WorldService {
     public record Emote(UUID accountId,String code,long startedAt,long expiresAt) {}
     private static final Set<String> EMOTE_CODES=Set.of("happy","sad","angry","question","thumb","heart","help","ok");
     private final Map<UUID,Emote> emotes=new HashMap<>();
-    private long tick=0,battleRevision=0;
+    private long tick=0,battleRevision=0,passageRevision=-1;
     private final ResourceService resources;private final ModerationService moderation;
     private final CharacterService characters;private final EquipmentService equipment;
     private final BattleService battles;private final FerryService ferry;private final HotbarService hotbar;
     private final LootService loot;private final SkillService skills;
     @org.springframework.beans.factory.annotation.Autowired private StatusService statuses;
     @org.springframework.beans.factory.annotation.Autowired private ShopService shops;
+    @org.springframework.beans.factory.annotation.Autowired private SceneService scenes;
     private void requireShop(UUID id){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中不能交易");if(routes.containsKey(id))throw AccountService.bad("请先停下");var tile=world.index().get(characters.get(id).hex());if(tile==null||tile.place()==null||!tile.place().type().equals("town"))throw AccountService.bad("请先到达城镇");}
     public synchronized Object shop(UUID id){requireShop(id);return shops.view(id);}
     public synchronized Object trade(UUID id,ShopService.Order order){requireShop(id);var result=tx.execute(s->{var out=shops.transact(id,order);hotbar.sync(id);return out;});battleRevision++;broadcast();return result;}
@@ -41,7 +42,12 @@ public class WorldService {
         else world=json.readValue(rows.getFirst(),WorldMap.class);
         WorldMap previous=world;world=WorldMap.expand(world);
         battles.world(world);
+        scenes.initialize(world.version());
+        battles.passages(scenes::open);characters.passages(scenes::open);
         tx.executeWithoutResult(s->{
+            // Unfinished long actions are interrupted on process restart, never completed offline.
+            db.update("delete from world_actions");
+            db.update("update characters set timer_kind=null,timer_end=0 where timer_kind='rest'");
             if(!previous.version().equals(world.version())){
                 db.update("update worlds set document=? where id=1",json.writeValueAsString(world));
                 db.update("update battle_encounters set world_version=? where world_version=?",world.version(),previous.version());
@@ -50,6 +56,7 @@ public class WorldService {
             boolean empty=resources.nodes().isEmpty();resources.initialize(world);
             if(!empty&&!previous.version().equals(world.version()))resources.extend(previous,world);
             ferry.initialize(world,System.currentTimeMillis());characters.initialize(world,System.currentTimeMillis());
+            battles.recoverAfterRestart(System.currentTimeMillis());
         });
     }
     public synchronized WorldMap map(){return world;}
@@ -67,6 +74,7 @@ public class WorldService {
         var out=new LinkedHashMap<String,Object>(Map.of("type","state","version",world.version(),"players",players.stream().filter(p->(entered.contains(p.get("id"))||p.get("kind").equals("monster"))).toList(),"tick",tick,"resources",resources.nodes(),"actions",resources.actions(),"serverTime",System.currentTimeMillis(),"emotes",emotes.values().stream().filter(e->e.expiresAt()>System.currentTimeMillis()).toList(),"battles",battles.summaries(world.version()),"battleRevision",battleRevision));boolean soul=viewing!=null&&viewing.life().equals("soul");
         out.put("ferry",soul?null:ferry.state());if(soul){out.put("resources",List.of());out.put("actions",List.of());out.put("emotes",List.of());out.put("battles",List.of());}
         out.put("loot",soul?List.of():loot.ground(world.version(),System.currentTimeMillis()));
+        out.put("blockedEdges",scenes.blocked());
         if(viewing!=null){out.put("character",viewing);out.put("inventory",resources.inventory(viewer));out.put("carriedCorpses",loot.carried(viewer));}return out;
     }
     public synchronized AccountService.Account register(String name,String pass){return tx.execute(s->{var a=accounts.register(name,pass,world.spawn());characters.ensurePlayers();equipment.give(a.id(),"copper_coin",30);return a;});}
@@ -83,7 +91,7 @@ public class WorldService {
         if(!soul&&battles.blocked(q,r))throw AccountService.bad("此格正在战斗，已封锁通行；请从相邻格选择参战");
         var available=new HashMap<>(world.index());
         if(!soul)battles.summaries(world.version()).forEach(b->available.remove(new WorldMap.Hex(b.q(),b.r())));
-        List<WorldMap.Hex> path=WorldMap.path(available,from,target,false);
+        List<WorldMap.Hex> path=WorldMap.path(available,from,target,false,scenes::open);
         if(path.isEmpty())throw AccountService.bad("无法到达这里，请选择陆地或经桥梁绕行");
         tx.executeWithoutResult(s->{resources.cancel(id);characters.cancelTimer(id);});
         routes.put(id,new ArrayDeque<>(path));broadcast();return path;
@@ -135,7 +143,7 @@ public class WorldService {
         WorldMap next=WorldMap.expand(WorldMap.generate(new SecureRandom().nextLong()));
         tx.executeWithoutResult(s->{db.update("update worlds set document=? where id=1",json.writeValueAsString(next));
             db.update("update accounts set q=?,r=?",next.spawn().q(),next.spawn().r());resources.reset(next);loot.resetGround();battles.reset();ferry.reset(next,System.currentTimeMillis());characters.reset(next,System.currentTimeMillis());audit(actor,"regenerate",next.version());});
-        world=next;battles.world(world);routes.clear();emotes.clear();battleRevision++;broadcast();return world;
+        world=next;battles.world(world);scenes.initialize(world.version());routes.clear();emotes.clear();battleRevision++;broadcast();return world;
     }
     private LootService.Context lootContext(UUID id,String version,UUID battleId){
         if(!world.version().equals(version))throw AccountService.bad("世界已更新，请刷新");
@@ -274,6 +282,8 @@ public class WorldService {
     private void audit(UUID actor,String action,String target){db.update("insert into admin_audit(actor,action,target) values(?,?,?)",actor,action,target);}
     @Scheduled(fixedDelay=350) public synchronized void advance(){
         tick++;
+        boolean passagesChanged=passageRevision!=scenes.revision();
+        if(passagesChanged){passageRevision=scenes.revision();battleRevision++;}
         boolean emotesChanged=emotes.values().removeIf(e->e.expiresAt()<=System.currentTimeMillis());
         long now=System.currentTimeMillis();
         var soulsBefore=characters.all().stream().filter(c->c.life().equals("soul")).map(CharacterService.Character::id).toList();
@@ -291,14 +301,21 @@ public class WorldService {
         if(tick%60==0){
             closeInvalidSessions();
         }
-        if(routes.isEmpty()){if(lifeChanged||monstersChanged||encounterChanged||resourcesChanged||emotesChanged||battlesChanged||ferryChanged||tick%30==0)broadcast();return;}
+        if(routes.isEmpty()){if(passagesChanged||lifeChanged||monstersChanged||encounterChanged||resourcesChanged||emotesChanged||battlesChanged||ferryChanged||tick%30==0)broadcast();return;}
         routes.entrySet().removeIf(e->battles.engaged(e.getKey())||characters.get(e.getKey()).life().equals("down")||!characters.get(e.getKey()).life().equals("soul")&&!e.getValue().isEmpty()&&battles.blocked(e.getValue().peek().q(),e.getValue().peek().r()));
         Map<UUID,WorldMap.Hex> steps=new HashMap<>();
-        routes.forEach((id,path)->{if(!path.isEmpty())steps.put(id,path.peek());});
+        routes.forEach((id,path)->{if(!path.isEmpty()){
+            if(scenes.open(characters.get(id).hex(),path.peek()))steps.put(id,path.peek());
+            else path.clear();
+        }});
         // Commit positions before announcing them; a restart cannot roll back an acknowledged step.
         tx.executeWithoutResult(s->steps.forEach((id,h)->db.update("update accounts set q=?,r=? where id=?",h.q(),h.r(),id)));
         steps.keySet().forEach(id->routes.get(id).remove());
-        tx.executeWithoutResult(s->{for(var e:routes.entrySet())if(characters.get(e.getKey()).life().equals("soul")&&!e.getValue().isEmpty()){var h=e.getValue().remove();characters.relocate(e.getKey(),h.q(),h.r());}});
+        tx.executeWithoutResult(s->{for(var e:routes.entrySet())if(characters.get(e.getKey()).life().equals("soul")&&!e.getValue().isEmpty()){
+            var h=e.getValue().peek();
+            if(scenes.open(characters.get(e.getKey()).hex(),h)){e.getValue().remove();characters.relocate(e.getKey(),h.q(),h.r());}
+            else e.getValue().clear();
+        }});
         routes.entrySet().removeIf(e->e.getValue().isEmpty());
         if(Boolean.TRUE.equals(tx.execute(s->monsterEncounters(now))))battleRevision++;
         broadcast();

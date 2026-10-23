@@ -13,6 +13,8 @@ public class BattleService {
     public static final List<WorldMap.Hex> DIRECTIONS=List.of(new WorldMap.Hex(1,0),new WorldMap.Hex(0,1),new WorldMap.Hex(-1,1),new WorldMap.Hex(-1,0),new WorldMap.Hex(0,-1),new WorldMap.Hex(1,-1));
     private static final String[] NAMES={"东","东南","西南","西","西北","东北"};
     private WorldMap world;
+    private java.util.function.BiPredicate<WorldMap.Hex,WorldMap.Hex> passageOpen=(a,b)->true;
+    public void passages(java.util.function.BiPredicate<WorldMap.Hex,WorldMap.Hex> value){passageOpen=value;}
     public void world(WorldMap value){world=value;}
     public static List<Integer> sides(int q,int r){
         List<Integer> out=new ArrayList<>();
@@ -25,12 +27,12 @@ public class BattleService {
     private List<Edge> edges(Encounter b){
         var index=world.index();List<Edge> result=new ArrayList<>();
         for(int i=0;i<6;i++){var d=DIRECTIONS.get(i);int q=b.q()+d.q(),r=b.r()+d.r();var tile=index.get(new WorldMap.Hex(q,r));var other=at(b.version(),q,r);
-            result.add(new Edge(i,NAMES[i],q,r,tile!=null&&tile.walkable(),other==null?null:other.id(),tile==null?"世界边界":tile.place()!=null?tile.place().name():switch(tile.terrain()){case "forest"->"森林";case "mountain"->"高山";case "river"->"河流";case "ocean"->"海洋";default->"原野";}));}
+            result.add(new Edge(i,NAMES[i],q,r,tile!=null&&tile.walkable()&&passageOpen.test(new WorldMap.Hex(b.q(),b.r()),new WorldMap.Hex(q,r)),other==null?null:other.id(),tile==null?"世界边界":tile.place()!=null?tile.place().name():switch(tile.terrain()){case "forest"->"森林";case "mountain"->"高山";case "river"->"河流";case "ocean"->"海洋";default->"原野";}));}
         return result;
     }
     public boolean blocked(int q,int r){return at(world.version(),q,r)!=null;}
     /** 与 (q,r) 相邻的进行中战斗 id（用于生物增援），没有则 null。 */
-    public UUID adjacentEncounter(int q,int r){for(var d:DIRECTIONS){var e=at(world.version(),q+d.q(),r+d.r());if(e!=null)return e.id();}return null;}
+    public UUID adjacentEncounter(int q,int r){for(var d:DIRECTIONS){var target=new WorldMap.Hex(q+d.q(),r+d.r());if(!passageOpen.test(new WorldMap.Hex(q,r),target))continue;var e=at(world.version(),target.q(),target.r());if(e!=null)return e.id();}return null;}
     private final JdbcTemplate db;
     private final AccountService accounts;
     private final CharacterService characters;
@@ -41,7 +43,16 @@ public class BattleService {
     private final tools.jackson.databind.json.JsonMapper json=tools.jackson.databind.json.JsonMapper.builder().build();
     private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(BattleService.class);
     private final Map<UUID,Long> aiNext=new HashMap<>();
+    private final BattleRecovery recovery=new BattleRecovery();
     private final long turnMillis;
+
+    public void recoverAfterRestart(long now){
+        for(Encounter battle:encounters("")){
+            db.update("update battle_encounters set turn_deadline=? where id=? and active=true",now+turnMillis,battle.id());
+            recovery.remember(battle.id(),battle.turn(),battle.round(),now+turnMillis);
+        }
+        aiNext.clear();
+    }
 
     public record Summary(UUID id,int q,int r,int participants) {}
     public record Actor(UUID accountId,String username,String color,int q,int r,int initiative,int entryRound,boolean online,Integer withdrawDirection,CharacterService.Character character,WeaponRules.Weapon weapon,EquipmentService.Loadout loadout,int initiativeRoll,int initiativeScore,int reactionPoints,boolean shieldRaised,List<String> actions) {}
@@ -185,6 +196,7 @@ public class BattleService {
         if(forActor(actor)!=null)throw bad("你已经在战斗中");
         var c=characters.get(actor);
         if(distance(c.q(),c.r(),b.q(),b.r())!=1)throw bad(c.npc()?"生物需到达相邻格才能增援":"请先到达战斗格旁边，再选择参战");
+        if(!passageOpen.test(c.hex(),new WorldMap.Hex(b.q(),b.r())))throw bad("该方向通道已封闭");
         if(!c.npc()){
             var a=accounts.get(actor);
             if(!a.approved())throw bad("请先到达战斗格旁边，再选择参战");
@@ -390,6 +402,7 @@ public class BattleService {
         if(b.points()==2)advanceTurn(b,position(b.id(),actor).initiative(),online,now);
     }
     private void advanceTurn(Encounter b,int after,Set<UUID> online,long now){
+        recovery.forget(b.id());
         if(db.update("delete from battle_intents where encounter_id=? and attacker_id=? and intent_kind='aim' and ready=true",b.id(),b.turn())>0)event(b.id(),"aim-expired",b.turn(),null,null,null,now);
         List<Position> all=positions(b.id());
         if(finishIfNeeded(b.id(),now))return;
@@ -544,6 +557,7 @@ public class BattleService {
         return true;
     }
     private void close(UUID id,long now){
+        recovery.forget(id);
         loot.closeBattle(id);
         db.update("update battle_encounters set active=false where id=?",id);
         db.update("delete from battle_intents where encounter_id=?",id);
@@ -561,7 +575,7 @@ public class BattleService {
             if(turn==null){advanceTurn(current,-1,online,now);changed=true;continue;}
             var c=characters.get(current.turn());
             // Timeout applies before the controller (human or AI) is allowed to act.
-            if(!c.alive()||current.deadline()<=now||!c.npc()&&!online.contains(c.id())){
+            if(!c.alive()||current.deadline()<=now||!c.npc()&&!online.contains(c.id())&&!recovery.waitForReconnect(current.id(),c.id(),current.round(),now)){
                 if(positions(current.id()).stream().anyMatch(p->online.contains(p.id())||characters.get(p.id()).npc())){advanceTurn(current,turn.initiative(),online,now);changed=true;}
             }else if(c.npc()){
                 if(aiNext.getOrDefault(c.id(),0L)<=now){

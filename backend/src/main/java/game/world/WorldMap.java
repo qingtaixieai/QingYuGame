@@ -21,6 +21,10 @@ public record WorldMap(String version, long seed, String name, int radius, Hex s
     }
     public List<Hex> path(Hex from, Hex to) { return path(index(),from,to,false); }
     static List<Hex> path(Map<Hex,Tile> tiles, Hex from, Hex to, boolean buildRoad) {
+        return path(tiles,from,to,buildRoad,(a,b)->true);
+    }
+    static List<Hex> path(Map<Hex,Tile> tiles, Hex from, Hex to, boolean buildRoad,
+                          java.util.function.BiPredicate<Hex,Hex> edgeOpen) {
         if (!tiles.containsKey(to) || (!buildRoad && !tiles.get(to).walkable())) return List.of();
         Map<Hex,Hex> previous = new HashMap<>();
         Map<Hex,Integer> cost = new HashMap<>();
@@ -33,6 +37,7 @@ public record WorldMap(String version, long seed, String name, int radius, Hex s
             if (s.cost != cost.get(s.h)) continue;
             if (s.h.equals(to)) break;
             for (Hex n : s.h.neighbors()) {
+                if(!edgeOpen.test(s.h,n))continue;
                 Tile t=tiles.get(n);
                 if (t==null || t.terrain.equals("ocean") || (!buildRoad && !t.walkable())) continue;
                 int next=s.cost+(buildRoad ? (t.terrain.equals("mountain") ? 15 : t.terrain.equals("river") ? 5 : 1) : 1);

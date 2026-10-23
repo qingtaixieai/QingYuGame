@@ -1,4 +1,4 @@
-import type {LootContainer} from './types';
+import type {LootContainer,BlockedEdge} from './types';
 import {bindMapGestures} from './mapGestures';
 import { memo, useEffect, useRef } from 'react';
 import { Application, Container, Graphics, Text } from 'pixi.js';
@@ -40,7 +40,7 @@ function ruin(g:Graphics,x:number,y:number){
   pixel(g,x-12,y+8,10,3,0x7d9b61);pixel(g,x+3,y+5,6,4,0x7d9b61);
 }
 export type MapControls={zoom:(factor:number)=>void;fit:()=>void;locate:(h:Hex)=>void};
-type Props={loot:LootContainer[];deathMark:Hex|null;active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
+type Props={blockedEdges?:BlockedEdge[];loot:LootContainer[];deathMark:Hex|null;active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
 export const MapView=memo(function MapView(props:Props){
   const host=useRef<HTMLDivElement>(null), latest=useRef(props), application=useRef<Application|null>(null);
   latest.current=props;
@@ -56,6 +56,7 @@ export const MapView=memo(function MapView(props:Props){
       const scene=new Container(),ground=new Graphics(),roads=new Graphics(),decor=new Graphics(),markers=new Container(),selection=new Graphics(),routeLine=new Graphics(),actors=new Container();
       app.stage.addChild(scene);const resourceLayer=new Container(),effects=new Container(),battleMarks=new Container();
       scene.addChild(ground,roads,decor,resourceLayer,markers,battleMarks,routeLine,selection,actors,effects);
+      const passageMarks=new Graphics();scene.addChild(passageMarks);let passageSignature='';
       const lootLayer=new Container();scene.addChild(lootLayer);let lootSignature='';
       let battleSignature="",deathSignature="";
       const deathMarker=new Container();scene.addChild(deathMarker);
@@ -124,6 +125,17 @@ export const MapView=memo(function MapView(props:Props){
       let frameAt=performance.now(),renderTime=Date.now()+latest.current.clockOffset;
       app.ticker.add(ticker=>{
         const current=latest.current,frameNow=performance.now();
+        const closedKey=JSON.stringify(current.blockedEdges||[]);
+        if(closedKey!==passageSignature){
+          passageSignature=closedKey;passageMarks.clear();
+          for(const edge of current.blockedEdges||[]){
+            const a=position(edge.from),b=position(edge.to),dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy);
+            if(!len)continue;
+            const x=(a.x+b.x)/2,y=(a.y+b.y)/2,px=-dy/len*SIZE*.46,py=dx/len*SIZE*.46;
+            passageMarks.moveTo(x-px,y-py).lineTo(x+px,y+py).stroke({color:0xffedce,width:5});
+            passageMarks.moveTo(x-px,y-py).lineTo(x+px,y+py).stroke({color:0xa84d3c,width:2.5});
+          }
+        }
         renderTime=advanceRenderClock(renderTime,frameNow-frameAt,Date.now()+current.clockOffset);
         frameAt=frameNow;
         const now=renderTime;
