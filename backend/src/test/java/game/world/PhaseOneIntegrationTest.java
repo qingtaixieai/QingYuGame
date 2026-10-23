@@ -157,6 +157,8 @@ class PhaseOneIntegrationTest {
             assertEquals(List.of(middle,end),world.move(actor.id(),end.q(),end.r(),map.version()));
             var first=SceneMap.outdoor(map,middle,2);var second=SceneMap.outdoor(map,end,2);var zero=new WorldMap.Hex(0,0);
             new TransactionTemplate(manager).executeWithoutResult(s->{scenes.save(first);scenes.save(second);scenes.save(new ScenePortal(UUID.randomUUID(),new ScenePortal.Endpoint(first.id(),zero),new ScenePortal.Endpoint(second.id(),zero),false));});
+            assertTrue(scenes.open(a,middle),"The first step must stay open: "+scenes.blocked());
+            assertFalse(scenes.open(middle,end),"Only the second step is closed");
             world.advance();assertEquals(middle,characters.get(actor.id()).hex());
         }
     }
@@ -173,6 +175,23 @@ class PhaseOneIntegrationTest {
             db.update("update battle_encounters set turn_account_id=?,turn_deadline=1 where id=?",monster,fight);
             tx.executeWithoutResult(s->battles.advance(Set.of(account.id()),now));
             assertNotEquals(monster,db.queryForObject("select turn_account_id from battle_encounters where id=?",UUID.class,fight));
+        }
+    }
+
+    @Test void savingSceneCannotOverwriteAnotherWorldOrDetachExistingPortal(){
+        synchronized(world){
+            var map=world.map();var id=UUID.randomUUID();
+            var foreign=new SceneMap(id,"foreign-world",1,2,map.spawn(),"foreign",2,List.of(new SceneMap.Cell(0,0,"grass",true)));
+            var json=tools.jackson.databind.json.JsonMapper.builder().build();
+            db.update("insert into scene_documents values(?,?,?)",id,foreign.worldVersion(),json.writeValueAsString(foreign));
+            var local=new SceneMap(id,map.version(),1,2,map.spawn(),"local",2,foreign.cells());
+            var tx=new TransactionTemplate(manager);
+            assertThrows(IllegalArgumentException.class,()->tx.executeWithoutResult(s->scenes.save(local)));
+            assertEquals(json.writeValueAsString(foreign),db.queryForObject("select document from scene_documents where id=?",String.class,id));
+            var a=SceneMap.outdoor(map,map.spawn(),2);var b=SceneMap.outdoor(map,map.spawn().neighbors().stream().filter(h->map.index().containsKey(h)).findFirst().orElseThrow(),2);
+            var zero=new WorldMap.Hex(0,0);
+            tx.executeWithoutResult(s->{scenes.save(a);scenes.save(b);scenes.save(new ScenePortal(UUID.randomUUID(),new ScenePortal.Endpoint(a.id(),zero),new ScenePortal.Endpoint(b.id(),zero),true));});
+            assertThrows(IllegalArgumentException.class,()->tx.executeWithoutResult(s->scenes.save(new SceneMap(a.id(),map.version(),1,2,a.owner(),"removed endpoint",2,List.of(new SceneMap.Cell(1,0,"grass",true))))));
         }
     }
 }

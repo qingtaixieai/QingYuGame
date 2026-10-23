@@ -297,7 +297,7 @@ public class WorldService {
         if(lootChanged)battleRevision++;
         boolean resourcesChanged=Boolean.TRUE.equals(tx.execute(s->resources.advance(world,now)))||lootChanged;
         boolean battlesChanged=Boolean.TRUE.equals(tx.execute(s->battles.advance(onlineUsers(),now)));
-        if(battlesChanged){battleRevision++;for(var c:characters.all())if(!c.alive()){routes.remove(c.id());resources.cancel(c.id());}}
+        if(battlesChanged){battleRevision++;for(var c:characters.all())if(!c.alive()){if(!c.life().equals("soul"))routes.remove(c.id());resources.cancel(c.id());}}
         if(tick%60==0){
             closeInvalidSessions();
         }
