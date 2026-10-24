@@ -11,6 +11,7 @@ import {Hotbar} from './Hotbar';
 import {itemSupported,targetReason} from './battleInventoryRules';
 import {attackCells,hexDistance,retainsAttack} from './combatRules';
 import {api} from './api';
+import {groundColor,sceneKey} from './sceneGeometry';
 import type {BattleState,Hex,Item} from './types';
 const SIZE=36;
 const xy=(h:Hex)=>({x:1.5*SIZE*h.q,y:Math.sqrt(3)*SIZE*(h.r+h.q/2)});
@@ -32,6 +33,7 @@ export function BattleView({loot,onLoot,battle,me,items,revision,connected,clock
  const [selected,setSelected]=useState<Hex|null>(null),[movePreview,setMovePreview]=useState<Hex|null>(null),[busy,setBusy]=useState(false),[zoom,setZoom]=useState(()=>window.matchMedia('(max-height:600px) and (orientation:landscape)').matches?1.7:1),[center,setCenter]=useState({x:0,y:0});
  const board=useRef<SVGSVGElement|null>(null),camera=useRef({zoom,center});camera.current={zoom,center};
  const tap=useRef<(x:number,y:number)=>void>(()=>{});
+ useEffect(()=>{const actor=battle.actors.find(a=>a.accountId===me);if(actor)setCenter(xy(actor));},[battle.id,me]);
  useEffect(()=>{const node=board.current;if(!node)return;return bindMapGestures(node,{
   pan:(dx,dy)=>{const c=camera.current,scale=890/c.zoom/Math.min(node.clientWidth,node.clientHeight);const next={x:c.center.x-dx*scale,y:c.center.y-dy*scale};camera.current={...c,center:next};setCenter(next);},
   zoom:(factor,x,y)=>{const c=camera.current,z=Math.max(.65,Math.min(3.5,c.zoom*factor)),size=Math.min(node.clientWidth,node.clientHeight),change=(890/c.zoom-890/z)/size;const next={x:c.center.x+(x-node.clientWidth/2)*change,y:c.center.y+(y-node.clientHeight/2)*change};camera.current={zoom:z,center:next};setZoom(z);setCenter(next);},
@@ -43,12 +45,13 @@ export function BattleView({loot,onLoot,battle,me,items,revision,connected,clock
  const reachable=useMemo(()=>{
    const out=new Map<string,Hex[]>();if(!own||!myTurn)return out;
    const occupied=new Set(battle.actors.filter(a=>a.accountId!==me).map(a=>`${a.q},${a.r}`));
+   const terrain=battle.cells?new Set(battle.cells.filter(c=>c.walkable).map(sceneKey)):null;
    const queue:Hex[]=[own];out.set(`${own.q},${own.r}`,[]);
    for(let i=0;i<queue.length;i++){const from=queue[i],path=out.get(`${from.q},${from.r}`)!;if(path.length>=battle.turnPoints)continue;
      for(const [dq,dr] of [[1,0],[-1,0],[0,1],[0,-1],[1,-1],[-1,1]]){const next={q:from.q+dq,r:from.r+dr},k=`${next.q},${next.r}`;
-       if(distance({q:0,r:0},next)<=battle.radius&&!occupied.has(k)&&!out.has(k)){out.set(k,[...path,next]);queue.push(next);}}
+       if(distance({q:0,r:0},next)<=battle.radius&&(!terrain||terrain.has(k))&&!occupied.has(k)&&!out.has(k)){out.set(k,[...path,next]);queue.push(next);}}
    }out.delete(`${own.q},${own.r}`);return out;
- },[battle.actors,battle.turnPoints,battle.radius,myTurn,me]);
+ },[battle.actors,battle.turnPoints,battle.radius,battle.cells,myTurn,me]);
  useEffect(()=>{setMode('inspect');setSelected(null);setMovePreview(null);},[battle.turnAccountId,battle.round]);
  useEffect(()=>{if(movePreview&&!reachable.has(`${movePreview.q},${movePreview.r}`)){setMovePreview(null);setSelected(null);}},[movePreview,reachable]);
  const [visual,setVisual]=useState<Record<string,Hex>>(()=>Object.fromEntries(battle.actors.map(a=>[a.accountId,a])));
@@ -106,6 +109,7 @@ export function BattleView({loot,onLoot,battle,me,items,revision,connected,clock
  function locate(h:Hex){setSelected(h);setCenter(xy(h));setZoom(1.5);}
  return <section className="battle-surface" aria-label="局部战场">
  <button className="loot-battle-open" disabled={!connected||busy||own?.character.life!=='alive'} onClick={()=>{setMode('inspect');setTargetItemCode(null);setInventoryOpen(false);onLoot();}}>尸体与遗留物 · {loot.length}</button>
+ {battle.sceneId&&<span className="battle-scene-marker" hidden/>}
  <CombatLog revision={revision}/>
  <div className="battle-ammo"><StatusPanel revision={revision} ammoOnly/></div>
  {inspected&&<section className="participant-info"><button onClick={()=>setInspected(null)}>关闭</button>{battle.actors.filter(a=>a.accountId===inspected).map(a=><div key={a.accountId}><h3>{a.username}</h3><p>生命 {a.character.hp}/{a.character.maxHp} · {a.character.life==='down'?'倒地':'存活'}</p><p>{a.accountId===me?`力量 ${a.character.strength} · 敏捷 ${a.character.agility} · 体魄 ${a.character.constitution} · 智识 ${a.character.intellect} · 感知 ${a.character.perception} · 意志 ${a.character.willpower}`:'属性与装备数值：未知'}</p>{battle.statuses?.[a.accountId]?.map(s=><p key={s.code}>{s.name} · 剩余{s.remaining}次 · {s.description}</p>)}</div>)}</section>}
@@ -117,13 +121,13 @@ export function BattleView({loot,onLoot,battle,me,items,revision,connected,clock
  <svg ref={board} className="battle-board" viewBox={`${center.x-span/2} ${center.y-span/2} ${span} ${span}`} aria-label="六边形战场，外圈是撤离区域" onWheel={e=>setZoom(z=>Math.max(.65,Math.min(3.5,z*(e.deltaY>0?.9:1.1))))}>
 
  {tiles(battle.radius).map(h=>{const p=xy(h),edge=sides(h,battle.radius),outer=edge.length>0,blocked=outer&&edge.every(d=>!battle.edges[d].walkable),chosen=selected?.q===h.q&&selected.r===h.r,marked=battle.intents.some(i=>i.cells.some(c=>c.q===h.q&&c.r===h.r)),near=selectable(h),n=((Math.imul(h.q+713+battle.worldQ,374761393)^Math.imul(h.r+997+battle.worldR,668265263))>>>0),occupied=battle.actors.some(a=>a.q===h.q&&a.r===h.r);return <g key={`${h.q},${h.r}`} className={'battle-cell '+(outer?'outer ':'')+(blocked?'blocked ':'')+(mode==='move'&&reachable.has(`${h.q},${h.r}`)?'reachable ':'')+(mode==='attack'&&near&&enabled?'attackable ':'')+(chosen?'selected ':'')+(marked?'marked':'')}>
- <polygon className="cell-ground" points={polygon(h)} fill={['#b9cc8b','#b5c986','#c0d090','#bacb88'][n%4]} onMouseEnter={()=>setHover(h)} onMouseLeave={()=>setHover(null)} tabIndex={0} role="button" aria-label={`战场格 ${h.q}, ${h.r}${outer?'，撤离区':''}`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();choose(h);}}}/>
+ <polygon className="cell-ground" points={polygon(h)} fill={battle.cells?groundColor(battle.cells.find(c=>c.q===h.q&&c.r===h.r)?.terrain||'deep'):['#b9cc8b','#b5c986','#c0d090','#bacb88'][n%4]} opacity={battle.cells&&!battle.cells.some(c=>c.q===h.q&&c.r===h.r&&c.walkable)?.35:1} onMouseEnter={()=>setHover(h)} onMouseLeave={()=>setHover(null)} tabIndex={0} role="button" aria-label={`战场格 ${h.q}, ${h.r}${outer?'，撤离区':''}`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();choose(h);}}}/>
  {mode==='move'&&reachable.has(`${h.q},${h.r}`)&&<polygon className="move-range" points={polygon(h,SIZE-3)} fill="white" fillOpacity={.05+.23*reachable.get(`${h.q},${h.r}`)!.length/Math.max(1,battle.turnPoints)} stroke="white" strokeOpacity={.2+.65*reachable.get(`${h.q},${h.r}`)!.length/Math.max(1,battle.turnPoints)} strokeWidth="2" pointerEvents="none"/>}
  {mode==='attack'&&near&&enabled&&<polygon className="attack-range" points={polygon(h,SIZE-4)} pointerEvents="none"/>}
  {mode==='item'&&targetItem&&own&&distance(own,h)<=(targetItem.use_range??0)&&<polygon className={targetReason(targetItem,own,battle.actors.find(a=>a.q===h.q&&a.r===h.r))?'item-target-range':'item-target-valid'} points={polygon(h,SIZE-4)} pointerEvents="none"/>}
  {sharedOption&&sharedCell(h)&&<polygon className="item-target-valid" points={polygon(h,SIZE-4)} pointerEvents="none"/>}
  {chosen&&<polygon className="selected-ring" points={polygon(h,SIZE-2)} pointerEvents="none"/>}
- <g pointerEvents="none" opacity={outer?.42:1} transform={`translate(${p.x} ${p.y})`}><path d="M-19 12h3v-5m0 5h4v-3M12-18h3v-4m0 4h4v-2" stroke="#72965e" strokeWidth="2" fill="none"/><path d="M-10-15h5v2h-5M15 15h4v2h-4" fill="#e0dda0"/>{!outer&&n%9===0?<g opacity={occupied?.35:1} transform="translate(10 -2) scale(.9)"><Tree/></g>:!outer&&n%7===0?<g transform="translate(12 5) scale(.85)"><Rock/></g>:null}{outer&&<text className="edge-cell-label" y="5">{edge.map(d=>battle.edges[d].walkable?['→','↘','↙','←','↖','↗'][d]:'×').join(' ')}</text>}</g>
+ <g pointerEvents="none" opacity={outer?.42:1} transform={`translate(${p.x} ${p.y})`}>{!battle.sceneId&&<><path d="M-19 12h3v-5m0 5h4v-3M12-18h3v-4m0 4h4v-2" stroke="#72965e" strokeWidth="2" fill="none"/><path d="M-10-15h5v2h-5M15 15h4v2h-4" fill="#e0dda0"/>{!outer&&n%9===0?<g opacity={occupied?.35:1} transform="translate(10 -2) scale(.9)"><Tree/></g>:!outer&&n%7===0?<g transform="translate(12 5) scale(.85)"><Rock/></g>:null}</>}{outer&&<text className="edge-cell-label" y="5">{edge.map(d=>battle.edges[d].walkable?['→','↘','↙','←','↖','↗'][d]:'×').join(' ')}</text>}</g>
  {marked&&<polygon className={battle.intents.some(i=>i.kind==='aim'&&i.cells.some(c=>c.q===h.q&&c.r===h.r))?'aim-zone':'battle-intent-ring'} points={polygon(h,SIZE-4)} pointerEvents="none"/>}</g>;})}
  {highlightIntent&&mode==='inspect'&&battle.intents.filter(i=>i.attackerId===highlightIntent).flatMap(i=>i.cells).map(h=><polygon key={'highlight-'+h.q+','+h.r} points={polygon(h,SIZE-2)} fill="#ffe59a33" stroke="#fff0ac" strokeWidth="4" pointerEvents="none"/>)}
  {mode==='attack'&&hover&&selectable(hover)&&shapeAt(hover).map(h=><polygon key={h.q+','+h.r} className="attack-preview" points={polygon(h,SIZE-5)}/>)}

@@ -1,0 +1,15 @@
+.scene-view{position:absolute;inset:0;background:#aabf8b;z-index:3;overflow:hidden}.scene-board{width:100%;height:100%;touch-action:none}.scene-caption{position:absolute;top:12px;left:16px;display:flex;gap:12px;align-items:center;background:#faf8eade;padding:10px 14px;border-radius:8px;pointer-events:none}.scene-controls{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);display:flex;gap:6px;white-space:nowrap;background:#faf8eae8;padding:8px;border-radius:10px}.scene-controls button,.scene-exits button,.scene-detail button,.scene-enter{padding:8px 12px;border:1px solid #859775;border-radius:6px;background:#faf8ea;color:#314936}.scene-controls .active{background:#496d54;color:white}.scene-exits{position:absolute;right:12px;top:72px;display:flex;gap:6px;flex-direction:column}.scene-detail{position:absolute;left:12px;bottom:78px;background:#faf8eaf0;padding:12px;max-width:290px;border-radius:8px}.scene-detail>button{float:right;margin-left:15px}.scene-enter{position:absolute;left:50%;bottom:18px;z-index:4;transform:translateX(-50%)}.game-shell:has(.scene-view) .world-side-panels,.game-shell:has(.scene-view) .location-card,.game-shell:has(.scene-view) .map-tools,.game-shell:has(.scene-view) .battle-result{display:none!important}.scene-detail div{margin-top:8px}.scene-detail div button{margin-left:8px}@media(max-height:600px){.scene-caption{top:6px;left:8px;font-size:11px;padding:5px 8px}.scene-controls{bottom:6px;padding:4px;gap:3px}.scene-controls button,.scene-exits button,.scene-detail button{font-size:11px;padding:5px 8px}.scene-detail{bottom:54px;font-size:12px;padding:8px}.scene-exits{top:42px}}
+.game-shell:has(.battle-scene-marker) .view-switch{display:none}
+.game-shell:has(.scene-view) .map-tool-group{display:none!important}
+.scene-loot{position:absolute;right:12px;bottom:85px;display:flex;flex-direction:column;gap:5px;background:#faf8eae8;border-radius:8px;padding:10px}.scene-loot button{padding:8px}
+.game-shell{--scene-ui-left:calc(var(--rail-width) + env(safe-area-inset-left,0px))}
+.game-shell.sidebar-open{--scene-ui-left:calc(var(--rail-width) + var(--side-width) + env(safe-area-inset-left,0px))}
+.scene-controls,.scene-enter{left:calc(50% + var(--scene-ui-left)/2);max-width:calc(100% - var(--scene-ui-left) - 20px)}
+.scene-controls{overflow-x:auto;box-sizing:border-box;scrollbar-width:thin}
+.scene-controls button{flex-shrink:0}
+.scene-caption,.scene-detail{left:calc(var(--scene-ui-left) + 8px);max-width:calc(100% - var(--scene-ui-left) - 24px);box-sizing:border-box}
+.scene-caption{flex-wrap:wrap;top:calc(var(--top-height,76px) + 8px)}
+.scene-controls{bottom:46px}
+.scene-detail{bottom:108px}
+.scene-exits{top:calc(var(--top-height,76px) + 60px)}
+@media(max-height:600px){.scene-controls{bottom:6px}.scene-detail{bottom:54px}.scene-exits{top:calc(var(--top-height,42px) + 42px)}}

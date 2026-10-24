@@ -20,15 +20,17 @@ public class LootService {
         return db.query("select c.*,(select coalesce(sum(quantity),0) from loot_items where container_id=c.id) as item_count from loot_containers c "+where,
             (r,n)->new Container(r.getObject("id",UUID.class),r.getString("kind"),r.getString("name"),r.getString("source_kind"),r.getObject("source_id",UUID.class),r.getString("world_version"),r.getInt("q"),r.getInt("r"),r.getObject("battle_id",UUID.class),(Integer)r.getObject("battle_q"),(Integer)r.getObject("battle_r"),r.getObject("carrier_id",UUID.class),r.getLong("created_at"),(Long)r.getObject("expires_at"),r.getLong("item_count"),r.getInt("strength"),r.getInt("agility"),r.getInt("constitution"),r.getInt("intellect"),r.getInt("perception"),r.getInt("willpower")),args);
     }
-    public List<Container> ground(String version,long now){return query("where carrier_id is null and world_version=? and expires_at>? order by created_at,id",version,now);}
+    public List<Container> ground(String version,long now){return query("where carrier_id is null and (scene_id is null or battle_id is not null) and world_version=? and expires_at>? order by created_at,id",version,now);}
     public List<Container> carried(UUID actor){return query("where carrier_id=? order by created_at,id",actor);}
-    public List<Container> nearby(Context c,long now){return c.battleId()==null?query("where carrier_id is null and battle_id is null and world_version=? and q=? and r=? and expires_at>? order by created_at,id",c.version(),c.q(),c.r(),now):query("where carrier_id is null and battle_id=? and expires_at>? order by created_at,id",c.battleId(),now);}
+    private UUID localScene(UUID actor){return db.queryForList("select scene_id from scene_positions where character_id=? and active",UUID.class,actor).stream().findFirst().orElse(null);}
+    public List<Container> nearby(Context c,long now){return c.battleId()==null?query("where carrier_id is null and battle_id is null and world_version=? and q=? and r=? and scene_id is not distinct from ? and expires_at>? order by created_at,id",c.version(),c.q(),c.r(),localScene(c.actor()),now):query("where carrier_id is null and battle_id=? and expires_at>? order by created_at,id",c.battleId(),now);}
     public static boolean sameCell(Container x,Context c){return Objects.equals(x.carrierId(),c.actor())||x.carrierId()==null&&x.version().equals(c.version())&&x.q()==c.q()&&x.r()==c.r()&&Objects.equals(x.battleId(),c.battleId())&&(c.battleId()==null||Objects.equals(x.battleQ(),c.battleQ())&&Objects.equals(x.battleR(),c.battleR()));}
     private Container require(UUID id,Context c,long now){
         if(id==null)throw AccountService.bad("请选择尸体或小袋子");
         var x=query("where id=? for update",id).stream().findFirst().orElseThrow(()->AccountService.bad("此处遗留物已被拿走或消失"));
         if(x.expiresAt()!=null&&x.expiresAt()<=now)throw AccountService.bad("此处遗留物已到期消失");
         if(!sameCell(x,c))throw AccountService.bad("必须站在同一格才能查看和拿取");
+        if(x.carrierId()==null&&c.battleId()==null){var scene=db.queryForObject("select scene_id from loot_containers where id=?",UUID.class,id);if(!Objects.equals(scene,localScene(c.actor())))throw AccountService.bad("遗留物不在当前场景");if(scene!=null&&db.queryForObject("select count(*) from scene_positions where character_id=? and active and q=? and r=?",Integer.class,c.actor(),x.battleQ(),x.battleR())!=1)throw AccountService.bad("请走到遗留物所在格");}
         return x;
     }
     public List<Map<String,Object>> contents(UUID id,Context c,long now){require(id,c,now);return db.queryForList("select d.*,i.quantity from loot_items i join item_definitions d on d.code=i.item_code where i.container_id=? order by d.code",id);}
@@ -39,6 +41,7 @@ public class LootService {
         db.update("insert into loot_containers(id,kind,name,source_kind,source_id,world_version,q,r,created_at,expires_at,strength,agility,constitution,intellect,perception,willpower) values(?,'corpse',?,'monster',?,?,?,?,?,?,?,?,?,?,?,?)",id,c.name()+"的尸体",c.id(),version,c.q(),c.r(),now,now+GROUND_LIFETIME,c.strength(),c.agility(),c.constitution(),c.intellect(),c.perception(),c.willpower());
         db.update("update loot_containers set source_species=? where id=?",c.species(),id);
         db.update("update loot_containers c set battle_id=a.encounter_id,battle_q=a.q,battle_r=a.r from battle_actors a join battle_encounters b on b.id=a.encounter_id where c.id=? and a.account_id=? and b.active=true",id,c.id());
+        markScene(id,c.id());
         // 生物背包物品随尸体掉落；装备的武器也一并进入尸体供玩家拾取。
         for(var row:db.queryForList("select item_code,quantity from inventories where character_id=? and quantity>0",c.id()))
             db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,?) on conflict(container_id,item_code) do update set quantity=loot_items.quantity+excluded.quantity",id,row.get("item_code"),row.get("quantity"));
@@ -48,11 +51,14 @@ public class LootService {
         db.update("update characters set weapon=null,offhand=null,body=null where id=?",c.id());
     }
     public void enterBattle(UUID battle,String version,int q,int r){
+        var scene=db.queryForObject("select scene_id from battle_encounters where id=?",UUID.class,battle);
+        if(scene!=null){db.update("update loot_containers set battle_id=? where scene_id=? and carrier_id is null and battle_id is null",battle,scene);return;}
         var old=query("where carrier_id is null and battle_id is null and world_version=? and q=? and r=?",version,q,r);
         for(var c:old){int cell=Math.floorMod(c.id().hashCode(),7);WorldMap.Hex h=cell==6?new WorldMap.Hex(0,0):BattleService.DIRECTIONS.get(cell);
             db.update("update loot_containers set battle_id=?,battle_q=?,battle_r=? where id=?",battle,h.q(),h.r(),c.id());}
     }
-    public void closeBattle(UUID id){db.update("update loot_containers set battle_id=null,battle_q=null,battle_r=null where battle_id=?",id);}
+    public void closeBattle(UUID id){db.update("update loot_containers set battle_id=null,battle_q=case when scene_id is null then null else battle_q end,battle_r=case when scene_id is null then null else battle_r end where battle_id=?",id);}
+    private void markScene(UUID container,UUID actor){db.update("update loot_containers set scene_id=null,battle_q=null,battle_r=null where id=? and battle_id is null",container);db.update("update loot_containers c set scene_id=p.scene_id,battle_q=p.q,battle_r=p.r from scene_positions p where c.id=? and p.character_id=? and p.active",container,actor);}
     public boolean expire(long now){return db.update("delete from loot_containers where carrier_id is null and expires_at<=?",now)>0;}
     public void resetGround(){db.update("delete from loot_containers where carrier_id is null");}
     public void execute(Context c,Command cmd,long now){
@@ -64,6 +70,7 @@ public class LootService {
             for(var d:drops){int amount=d.quantity()==null?0:d.quantity();if(amount<1)throw AccountService.bad("请输入有效数量");
                 if(db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",amount,c.actor(),d.code(),amount)!=1)throw AccountService.bad("背包物品数量不足");}
             UUID id=UUID.randomUUID();db.update("insert into loot_containers(id,kind,name,world_version,q,r,created_at,expires_at) values(?,'pile','掉落堆',?,?,?,?,?)",id,c.version(),c.q(),c.r(),now,now+GROUND_LIFETIME);
+            markScene(id,c.actor());
             for(var d:drops)db.update("insert into loot_items values(?,?,?)",id,d.code(),d.quantity());
             return;
         }
@@ -71,12 +78,13 @@ public class LootService {
         switch(cmd.action()){
             case "carry" -> {
                 if(!x.kind().equals("corpse")||x.carrierId()!=null)throw AccountService.bad("只能搬走地上的尸体");
-                db.update("update loot_containers set carrier_id=?,expires_at=null,battle_id=null,battle_q=null,battle_r=null where id=?",c.actor(),x.id());
+                db.update("update loot_containers set carrier_id=?,expires_at=null,battle_id=null,battle_q=null,battle_r=null,scene_id=null where id=?",c.actor(),x.id());
             }
             case "dropCorpse" -> {
                 if(c.battleId()!=null)throw AccountService.bad("当前仅开放战斗外丢弃");
                 if(!Objects.equals(x.carrierId(),c.actor()))throw AccountService.bad("尸体不在你的背包中");
                 db.update("update loot_containers set carrier_id=null,world_version=?,q=?,r=?,expires_at=? where id=?",c.version(),c.q(),c.r(),now+GROUND_LIFETIME,x.id());
+                markScene(x.id(),c.actor());
             }
             case "take","takeAll" -> {
                 var items=db.queryForList("select item_code,quantity from loot_items where container_id=?",x.id());

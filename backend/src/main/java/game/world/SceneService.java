@@ -16,6 +16,7 @@ public class SceneService {
     private String version;
     private long revision;
     public synchronized long revision(){return revision;}
+    public synchronized String version(){return version;}
     public SceneService(JdbcTemplate db){this.db=db;}
     public synchronized void initialize(String version){this.version=version;refresh();}
     public synchronized boolean open(WorldMap.Hex from,WorldMap.Hex to){return passages.open(from,to);}

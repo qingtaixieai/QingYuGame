@@ -13,6 +13,15 @@ public class BattleService {
     public static final List<WorldMap.Hex> DIRECTIONS=List.of(new WorldMap.Hex(1,0),new WorldMap.Hex(0,1),new WorldMap.Hex(-1,1),new WorldMap.Hex(-1,0),new WorldMap.Hex(0,-1),new WorldMap.Hex(1,-1));
     private static final String[] NAMES={"东","东南","西南","西","西北","东北"};
     private WorldMap world;
+    @org.springframework.beans.factory.annotation.Autowired private SceneRuntime sceneRuntime;
+    private UUID sceneId(Encounter b){return b.scene()==null?null:b.scene().id();}
+    private SceneMap scene(Encounter b){return b.scene();}
+    private int radius(Encounter b){var scene=scene(b);return scene==null?RADIUS:scene.radius();}
+    private List<Integer> sides(Encounter b,int q,int r){return SceneRuntime.sides(new WorldMap.Hex(q,r),radius(b));}
+    private boolean within(Encounter b,int q,int r){return distance(0,0,q,r)<=radius(b);}
+    private boolean exit(Encounter b,int q,int r){return !sides(b,q,r).isEmpty();}
+    private Set<WorldMap.Hex> terrainBlocked(Encounter b){var s=scene(b);if(s==null)return Set.of();var legal=new HashSet<>(s.cells().stream().filter(SceneMap.Cell::walkable).map(SceneMap.Cell::hex).toList());var out=new HashSet<WorldMap.Hex>();for(int q=-s.radius();q<=s.radius();q++)for(int r=-s.radius();r<=s.radius();r++){var h=new WorldMap.Hex(q,r);if(!legal.contains(h))out.add(h);}return out;}
+    private void saveScenePositions(Encounter b){var id=sceneId(b);if(id!=null)for(var p:positions(b.id()))sceneRuntime.put(p.id(),id,new WorldMap.Hex(p.q(),p.r()));}
     private java.util.function.BiPredicate<WorldMap.Hex,WorldMap.Hex> passageOpen=(a,b)->true;
     public void passages(java.util.function.BiPredicate<WorldMap.Hex,WorldMap.Hex> value){passageOpen=value;}
     public void world(WorldMap value){world=value;}
@@ -58,7 +67,7 @@ public class BattleService {
     public record Actor(UUID accountId,String username,String color,int q,int r,int initiative,int entryRound,boolean online,Integer withdrawDirection,CharacterService.Character character,WeaponRules.Weapon weapon,EquipmentService.Loadout loadout,int initiativeRoll,int initiativeScore,int reactionPoints,boolean shieldRaised,List<String> actions) {}
     public record Intent(UUID attackerId,UUID targetId,int q,int r,String visibility,List<WorldMap.Hex> cells,String weapon,int damage,int minRange,int maxRange,String moveRule,Integer originQ,Integer originR,String kind,boolean ready) {}
     public record Event(long id,String kind,UUID actorId,UUID targetId,Integer q,Integer r,long happenedAt,String actorName,String targetName,Integer amount,Integer blocked,Map<String,Object> details) {}
-    private record Encounter(UUID id,String version,int q,int r,int round,UUID turn,int points,boolean attackUsed,long deadline,int nextInitiative,boolean turnStartEdge) {}
+    private record Encounter(UUID id,String version,int q,int r,int round,UUID turn,int points,boolean attackUsed,long deadline,int nextInitiative,boolean turnStartEdge,SceneMap scene) {}
     private record Position(UUID id,int q,int r,int initiative,int entryRound) {}
 
     BattleService(JdbcTemplate db,AccountService accounts,CharacterService characters,EquipmentService equipment,LootService loot,CombatActions combatActions,StatusService statuses,@Value("${game.battle.turn-ms:45000}") long turnMillis){
@@ -67,8 +76,8 @@ public class BattleService {
     }
 
     private List<Encounter> encounters(String where,Object... args){
-        return db.query("select id,world_version,world_q,world_r,round_number,turn_account_id,turn_points,attack_used,turn_deadline,next_initiative,turn_start_edge from battle_encounters where active=true "+where,
-            (rs,n)->new Encounter(rs.getObject(1,UUID.class),rs.getString(2),rs.getInt(3),rs.getInt(4),rs.getInt(5),rs.getObject(6,UUID.class),rs.getInt(7),rs.getBoolean(8),rs.getLong(9),rs.getInt(10),rs.getBoolean(11)),args);
+        return db.query("select id,world_version,world_q,world_r,round_number,turn_account_id,turn_points,attack_used,turn_deadline,next_initiative,turn_start_edge,(select document from scene_documents where id=battle_encounters.scene_id) from battle_encounters where active=true "+where,
+            (rs,n)->new Encounter(rs.getObject(1,UUID.class),rs.getString(2),rs.getInt(3),rs.getInt(4),rs.getInt(5),rs.getObject(6,UUID.class),rs.getInt(7),rs.getBoolean(8),rs.getLong(9),rs.getInt(10),rs.getBoolean(11),rs.getString(12)==null?null:json.readValue(rs.getString(12),SceneMap.class)),args);
     }
     private Encounter at(String version,int q,int r){return encounters("and world_version=? and world_q=? and world_r=?",version,q,r).stream().findFirst().orElse(null);}
     private Encounter forActor(UUID id){return encounters("and id in (select encounter_id from battle_actors where account_id=?)",id).stream().findFirst().orElse(null);}
@@ -139,7 +148,8 @@ public class BattleService {
         List<Intent> intents=intents(b.id()).stream().filter(i->i.visibility().equals("public")||i.attackerId().equals(viewer)).toList();
         List<Event> events=events(b.id(),32);
         Map<String,Object> out=new LinkedHashMap<>();
-        out.put("active",true);out.put("id",b.id());out.put("worldQ",b.q());out.put("worldR",b.r());out.put("radius",RADIUS);
+        out.put("active",true);out.put("id",b.id());out.put("worldQ",b.q());out.put("worldR",b.r());out.put("radius",radius(b));
+        var scene=scene(b);if(scene!=null){out.put("sceneId",scene.id());out.put("cells",scene.cells());}
         out.put("round",b.round());out.put("turnAccountId",b.turn());out.put("turnPoints",b.points());out.put("turnDeadline",b.deadline());
         out.put("attackUsed",b.attackUsed());out.put("actors",actors);out.put("intents",intents);out.put("events",events);out.put("edges",edges(b));out.put("turnStartEdge",b.turnStartEdge());
         out.put("actionOptions",actionOptions(viewer));
@@ -162,22 +172,22 @@ public class BattleService {
         characters.requireAlive(actor);
         if((!t.alive()&&!t.life().equals("down"))||t.protectedUntil()>now)throw bad("目标当前不能参战");
         if(a.q()!=t.q()||a.r()!=t.r())throw bad("只能向同一世界格的角色发起战斗");
+        var ap=sceneRuntime.position(actor);var tp=sceneRuntime.position(target);
+        if((ap==null)!=(tp==null)||ap!=null&&!ap.sceneId().equals(tp.sceneId()))throw bad("目标不在同一实际场景");
         for(var c:List.of(a,t))if(!c.npc()&&(!accounts.get(c.id()).approved()||db.queryForObject("select count(*) from accounts where id=? and entered=true",Integer.class,c.id())==0))throw bad("角色尚未进入世界");
         if(forActor(actor)!=null||forActor(target)!=null)throw bad("角色已经在战斗中");
         if(at(version,a.q(),a.r())!=null)throw bad("此格已有战斗，请选择加入");
         UUID id=UUID.randomUUID();
-        db.update("insert into battle_encounters(id,world_version,world_q,world_r,turn_account_id,turn_deadline) values(?,?,?,?,?,?)",id,version,a.q(),a.r(),actor,now+turnMillis);
+        var actualScene=ap==null?sceneRuntime.outdoor(world,a.hex()):sceneRuntime.map(ap.sceneId());
+        if(ap==null){var occupied=sceneRuntime.occupied(actualScene.id(),actor);var starts=new ArrayList<>(actualScene.cells().stream().filter(SceneMap.Cell::walkable).map(SceneMap.Cell::hex).filter(h->SceneRuntime.sides(h,actualScene.radius()).isEmpty()&&!occupied.contains(h)).toList());if(starts.size()<2)throw bad("场景内部没有足够合法空位");Collections.shuffle(starts);sceneRuntime.put(actor,actualScene.id(),starts.get(0));sceneRuntime.put(target,actualScene.id(),starts.get(1));}
+        db.update("insert into battle_encounters(id,world_version,world_q,world_r,turn_account_id,turn_deadline,scene_id) values(?,?,?,?,?,?,?)",id,version,a.q(),a.r(),actor,now+turnMillis,actualScene.id());
         Set<UUID> entered=new HashSet<>(db.query("select id from accounts where approved=true and entered=true",(rs,n)->rs.getObject(1,UUID.class)));
-        List<UUID> participants=new ArrayList<>(characters.all().stream().filter(c->(c.npc()||entered.contains(c.id()))&&(c.alive()||c.life().equals("down"))&&c.q()==a.q()&&c.r()==a.r()&&(c.protectedUntil()<=now||c.id().equals(actor))).map(CharacterService.Character::id).toList());
+        List<UUID> participants=new ArrayList<>(sceneRuntime.residents(actualScene.id()).stream().map(SceneRuntime.Position::characterId).filter(u->{var c=characters.get(u);return (c.npc()||entered.contains(u))&&(c.alive()||c.life().equals("down"));}).toList());
         Map<UUID,Integer> rolls=new HashMap<>();participants.forEach(u->rolls.put(u,1+new java.security.SecureRandom().nextInt(20)));
         Collections.shuffle(participants);
         participants.sort(Comparator.<UUID>comparingInt(u->rolls.get(u)+Math.floorDiv(characters.get(u).agility()-10,2)).reversed().thenComparing(Comparator.<UUID>comparingInt(u->characters.get(u).agility()).reversed()));
         characters.hostile(actor);
-        List<WorldMap.Hex> cells=new ArrayList<>();
-        for(int q=-RADIUS+1;q<RADIUS;q++)for(int r=-RADIUS+1;r<RADIUS;r++)if(distance(0,0,q,r)<RADIUS)cells.add(new WorldMap.Hex(q,r));
-        if(participants.size()>cells.size())throw bad("此格人数超过战场容量");
-        Collections.shuffle(cells);
-        for(int i=0;i<participants.size();i++){UUID user=participants.get(i);if(engaged(user))throw bad("同格角色已在其他战斗中");var cell=cells.get(i);
+        for(int i=0;i<participants.size();i++){UUID user=participants.get(i);if(engaged(user))throw bad("同格角色已在其他战斗中");var cell=sceneRuntime.position(user).hex();
             db.update("insert into battle_actors(encounter_id,account_id,q,r,initiative,entry_round) values(?,?,?,?,?,1)",id,user,cell.q(),cell.r(),i);}
         for(UUID user:participants){characters.cancelTimer(user);db.update("update battle_actors set initiative_roll=?,initiative_score=? where encounter_id=? and account_id=?",rolls.get(user),rolls.get(user)+Math.floorDiv(characters.get(user).agility()-10,2),id,user);}
         db.update("update battle_encounters set next_initiative=?,turn_account_id=? where id=?",participants.size(),participants.getFirst(),id);
@@ -195,14 +205,17 @@ public class BattleService {
         characters.requireAlive(actor);characters.hostile(actor);
         if(forActor(actor)!=null)throw bad("你已经在战斗中");
         var c=characters.get(actor);
-        if(distance(c.q(),c.r(),b.q(),b.r())!=1)throw bad(c.npc()?"生物需到达相邻格才能增援":"请先到达战斗格旁边，再选择参战");
-        if(!passageOpen.test(c.hex(),new WorldMap.Hex(b.q(),b.r())))throw bad("该方向通道已封闭");
+        int gap=distance(c.q(),c.r(),b.q(),b.r());
+        if(gap>1)throw bad("请先到达战斗格或相邻格");
+        if(gap==1&&!passageOpen.test(c.hex(),new WorldMap.Hex(b.q(),b.r())))throw bad("该方向通道已封闭");
+        var local=sceneRuntime.position(actor);
+        if(local!=null&&(gap!=1||!sidesForWorldCross(local,new WorldMap.Hex(b.q(),b.r()))))throw bad("请先走到对应边缘再参战");
         if(!c.npc()){
             var a=accounts.get(actor);
             if(!a.approved())throw bad("请先到达战斗格旁边，再选择参战");
             if(db.queryForObject("select count(*) from accounts where id=? and entered=true",Integer.class,actor)==0)throw bad("请先进入世界");
         }
-        int direction=direction(c.q()-b.q(),c.r()-b.r());
+        int direction=gap==0?-1:direction(c.q()-b.q(),c.r()-b.r());
         enter(actor,b,direction,now);
         characters.relocate(actor,b.q(),b.r());
         return id;
@@ -213,14 +226,17 @@ public class BattleService {
         throw bad("此格战场入口已满，请稍后复活");
     }
     private static int direction(int q,int r){return DIRECTIONS.indexOf(new WorldMap.Hex(q,r));}
+    private boolean sidesForWorldCross(SceneRuntime.Position p,WorldMap.Hex destination){var s=sceneRuntime.map(p.sceneId());int d=direction(destination.q()-s.owner().q(),destination.r()-s.owner().r());return SceneRuntime.sides(p.hex(),s.radius()).contains(d);}
     private WorldMap.Hex entryCell(Encounter b,int direction){
         Set<String> occupied=new HashSet<>();positions(b.id()).forEach(p->occupied.add(p.q()+","+p.r()));
         List<WorldMap.Hex> cells=new ArrayList<>();
-        for(int q=-RADIUS;q<=RADIUS;q++)for(int r=-RADIUS;r<=RADIUS;r++)if(sides(q,r).contains(direction)&&!occupied.contains(q+","+r))cells.add(new WorldMap.Hex(q,r));
+        var blocked=terrainBlocked(b);int radius=radius(b);
+        for(int q=-radius;q<=radius;q++)for(int r=-radius;r<=radius;r++)if((direction<0?!sides(b,q,r).isEmpty():sides(b,q,r).contains(direction))&&!occupied.contains(q+","+r)&&!blocked.contains(new WorldMap.Hex(q,r)))cells.add(new WorldMap.Hex(q,r));
         Collections.shuffle(cells);return cells.isEmpty()?null:cells.getFirst();
     }
     private void enter(UUID actor,Encounter b,int direction,long now){
         var spawn=entryCell(b,direction);if(spawn==null)throw bad("该方向的战场入口已满，请稍后再试");
+        var sceneId=sceneId(b);if(sceneId!=null)sceneRuntime.put(actor,sceneId,spawn);else sceneRuntime.leave(actor);
         int roll=1+new java.security.SecureRandom().nextInt(20),score=roll+Math.floorDiv(characters.get(actor).agility()-10,2);
         db.update("insert into battle_actors(encounter_id,account_id,q,r,initiative,entry_round,initiative_roll,initiative_score) values(?,?,?,?,?,?,?,?)",b.id(),actor,spawn.q(),spawn.r(),b.nextInitiative(),b.round()+1,roll,score);
         db.update("update battle_encounters set next_initiative=next_initiative+1 where id=?",b.id());
@@ -270,9 +286,9 @@ public class BattleService {
             if(from!=null){
                 var origin=new WorldMap.Hex(from.q(),from.r());
                 if(d.effect().equals("aim")){
-                    for(int q=-RADIUS;q<=RADIUS;q++)for(int r=-RADIUS;r<=RADIUS;r++){
+                    for(int q=-radius(b);q<=radius(b);q++)for(int r=-radius(b);r<=radius(b);r++){
                         int distance=distance(from.q(),from.r(),q,r);
-                        if(within(q,r)&&distance>=d.minRange()&&distance<=d.maxRange())cells.add(new WorldMap.Hex(q,r));
+                        if(within(b,q,r)&&distance>=d.minRange()&&distance<=d.maxRange())cells.add(new WorldMap.Hex(q,r));
                     }
                 }else if(d.effect().equals("heal_self")){
                     if(profile.alive()&&profile.hp()<profile.maxHp())targets.add(actor);
@@ -302,7 +318,7 @@ public class BattleService {
         var d=option.definition();var from=position(b.id(),actor);
         if(d.effect().equals("aim")){
             if(q==null||r==null||!option.cells().contains(new WorldMap.Hex(q,r)))throw bad("请选择射程内的瞄准中心");
-            var w=characters.weapon(actor);var cells=WeaponRules.aimCells(w,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r),RADIUS);
+            var w=characters.weapon(actor);var cells=WeaponRules.aimCells(w,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r),radius(b));
             cancelIntent(b.id(),actor,"cancel",now);
             db.update("insert into battle_intents(encounter_id,attacker_id,q,r,visibility,cells,weapon,damage,min_range,max_range,move_rule,origin_q,origin_r,intent_kind,ready) values(?,?,?,?,'public',?,?,?,?,?,?,?,?,'aim',false)",b.id(),actor,q,r,json.writeValueAsString(cells),w.code(),d.damage(),w.minRange(),w.maxRange(),w.moveRule(),from.q(),from.r());
             characters.hostile(actor);event(b.id(),"aim",actor,null,q,r,now);
@@ -339,7 +355,8 @@ public class BattleService {
         Encounter b=requireTurn(actor);requireStanding(actor);Position from=position(b.id(),actor);
         Set<WorldMap.Hex> occupied=new HashSet<>();
         positions(b.id()).stream().filter(p->!p.id().equals(actor)).forEach(p->occupied.add(new WorldMap.Hex(p.q(),p.r())));
-        var route=BattleMovement.path(RADIUS,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r),occupied);
+        occupied.addAll(terrainBlocked(b));
+        var route=BattleMovement.path(radius(b),new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r),occupied);
         if(route.isEmpty())throw bad("这里无法到达，请选择可移动范围内的空格");
         if(route.size()>b.points())throw bad("行动点不足，请选择白色可移动范围内的格子");
         int currentQ=from.q(),currentR=from.r(),spent=0;
@@ -355,6 +372,7 @@ public class BattleService {
             spent++;
             if(db.update("delete from battle_intents where encounter_id=? and attacker_id=? and intent_kind='aim'",b.id(),actor)>0)event(b.id(),"aim-cancel",actor,null,null,null,now);
             db.update("update battle_actors set q=?,r=? where encounter_id=? and account_id=?",next.q(),next.r(),b.id(),actor);
+            var sceneId=sceneId(b);if(sceneId!=null)sceneRuntime.put(actor,sceneId,next);
             event(b.id(),"move",actor,null,next.q(),next.r(),now);detailLast(b.id(),Map.of("actionPoints",1));
             currentQ=next.q();currentR=next.r();
         }
@@ -371,7 +389,7 @@ public class BattleService {
         if(!characters.loadout(actor).canAttack())throw bad("当前装备无法普通攻击");
         var weapon=characters.weapon(actor);
         if(equipment.projectile(weapon.code())!=null)throw bad("远程武器请选择速射或瞄准");
-        var cells=WeaponRules.battlefieldCells(weapon,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r),RADIUS);
+        var cells=WeaponRules.battlefieldCells(weapon,new WorldMap.Hex(from.q(),from.r()),new WorldMap.Hex(q,r),radius(b));
         if(cells.isEmpty())throw bad("请选择武器可攻击的完整范围");
         Intent previous=intents(b.id()).stream().filter(i->i.attackerId().equals(actor)).findFirst().orElse(null);
         if(previous!=null&&previous.q()==q&&previous.r()==r)return;
@@ -412,7 +430,7 @@ public class BattleService {
         if(next==null){round++;sortInitiative(b.id());all=positions(b.id());final int newRound=round;next=all.stream().filter(p->p.entryRound()<=newRound).findFirst().orElse(null);}
         if(next==null)throw new IllegalStateException("Battle has no eligible actor");
         db.update("update battle_encounters set round_number=?,turn_account_id=?,turn_points=?,attack_used=false,turn_deadline=?,turn_start_edge=? where id=?",
-            round,next.id(),characters.get(next.id()).alive()?TURN_POINTS:0,now+turnMillis,exit(next.q(),next.r()),b.id());
+            round,next.id(),characters.get(next.id()).alive()?TURN_POINTS:0,now+turnMillis,exit(b,next.q(),next.r()),b.id());
         db.update("update battle_actors set reaction_points=0,shield_raised=false where encounter_id=? and account_id=?",b.id(),next.id());
         event(b.id(),"turn",next.id(),null,null,null,now);
         if(tickStatuses(b.id(),next.id(),now)){
@@ -530,7 +548,7 @@ public class BattleService {
     }
     public void withdraw(UUID actor,int direction,boolean force,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);requireStanding(actor);Position p=position(b.id(),actor);
-        if(direction<0||direction>5||!sides(p.q(),p.r()).contains(direction))throw bad("请站在对应方向的外圈格子");
+        if(direction<0||direction>5||!sides(b,p.q(),p.r()).contains(direction))throw bad("请站在对应方向的外圈格子");
         if(!edges(b).get(direction).walkable())throw bad("该方向的大世界地形不可通行");
         if(force){
             if(!b.turnStartEdge()||b.points()!=TURN_POINTS)throw bad("强制撤离需要回合开始已在外圈且保留完整6点");
@@ -546,17 +564,21 @@ public class BattleService {
         Encounter destination=edge.battleId()==null?null:byId(edge.battleId());
         int incoming=(direction+3)%6;
         if(destination!=null&&entryCell(destination,incoming)==null)return false;
+        SceneMap nextScene=null;WorldMap.Hex nextCell=null;
+        if(sceneId(b)!=null&&destination==null){nextScene=sceneRuntime.outdoor(world,new WorldMap.Hex(edge.q(),edge.r()));nextCell=SceneRuntime.edgeCell(nextScene,incoming,sceneRuntime.occupied(nextScene.id(),actor));if(nextCell==null)return false;}
         Position p=position(b.id(),actor);
         // Leaving the encounter cancels telegraphs; it is not a tactical step out of a marked cell.
         db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
         db.update("delete from battle_actors where encounter_id=? and account_id=?",b.id(),actor);
         characters.relocate(actor,edge.q(),edge.r());
+        if(nextScene!=null)sceneRuntime.put(actor,nextScene.id(),nextCell);else if(destination==null)sceneRuntime.leave(actor);
         event(b.id(),"exit",actor,null,p.q(),p.r(),now);
         if(destination!=null)enter(actor,destination,incoming,now);
         if(!finishIfNeeded(b.id(),now))advanceTurn(b,p.initiative(),online,now);
         return true;
     }
     private void close(UUID id,long now){
+        var b=byId(id);if(b!=null)saveScenePositions(b);
         recovery.forget(id);
         loot.closeBattle(id);
         db.update("update battle_encounters set active=false where id=?",id);
@@ -626,14 +648,15 @@ public class BattleService {
         boolean lowAndOut=characters.get(own.id()).hp()<=(behavior.equals("cautious")?4:behavior.equals("aggressive")?1:2)&&!equipment.has(own.id(),"healing_potion")&&!equipment.has(own.id(),"bandage");
         if(ranged&&!equipment.has(own.id(),equipment.selectedAmmo(own.id(),projectile.ammoCode()))||lowAndOut){
             var exits=edges(b);
-            for(int direction:sides(own.q(),own.r()))if(exits.get(direction).walkable()){
+            for(int direction:sides(b,own.q(),own.r()))if(exits.get(direction).walkable()){
                 withdraw(own.id(),direction,b.turnStartEdge()&&b.points()==6,online,now);return;
             }
             WorldMap.Hex destination=null;int best=Integer.MAX_VALUE;
             var occupied=new HashSet<WorldMap.Hex>();positions(b.id()).stream().filter(p->!p.id().equals(own.id())).forEach(p->occupied.add(new WorldMap.Hex(p.q(),p.r())));
-            for(int q=-RADIUS;q<=RADIUS;q++)for(int r=-RADIUS;r<=RADIUS;r++){
-                final int cq=q,cr=r;if(sides(q,r).stream().noneMatch(d->exits.get(d).walkable()))continue;
-                var route=BattleMovement.path(RADIUS,from,new WorldMap.Hex(cq,cr),occupied);
+            occupied.addAll(terrainBlocked(b));
+            for(int q=-radius(b);q<=radius(b);q++)for(int r=-radius(b);r<=radius(b);r++){
+                final int cq=q,cr=r;if(sides(b,q,r).stream().noneMatch(d->exits.get(d).walkable()))continue;
+                var route=BattleMovement.path(radius(b),from,new WorldMap.Hex(cq,cr),occupied);
                 if(!route.isEmpty()&&route.size()<best){best=route.size();destination=route.get(Math.min(route.size(),Math.max(1,b.points()))-1);}
             }
             if(destination!=null&&b.points()>0)step(own.id(),destination.q(),destination.r(),online,now);else endTurn(own.id(),online,now);
@@ -658,9 +681,9 @@ public class BattleService {
         }
         if(!ranged&&characters.loadout(own.id()).canAttack()&&b.points()>=weapon.cost()){
             // Enumerate aim cells, not only targets: a fan can hit a target with its second cell.
-            for(int q=-RADIUS;q<=RADIUS;q++)for(int r=-RADIUS;r<=RADIUS;r++){
+            for(int q=-radius(b);q<=radius(b);q++)for(int r=-radius(b);r<=radius(b);r++){
                 var aim=new WorldMap.Hex(q,r);
-                var cells=WeaponRules.battlefieldCells(weapon,from,aim,RADIUS);
+                var cells=WeaponRules.battlefieldCells(weapon,from,aim,radius(b));
                 if(cells.isEmpty())continue;
                 double score=0;
                 for(var t:targets){var h=new WorldMap.Hex(t.q(),t.r());
@@ -670,7 +693,7 @@ public class BattleService {
             }
         }
         if(b.points()>=2){var self=characters.get(own.id());if(self.hp()<self.maxHp()&&equipment.has(own.id(),"bandage"))options.add(new MonsterBrain.Option("heal",from,self.hp()<=healThreshold?14:behavior.equals("aggressive")?0:6));}
-        if(b.points()>0)for(var next:from.neighbors())if(within(next.q(),next.r())&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
+        if(b.points()>0)for(var next:from.neighbors())if(within(b,next.q(),next.r())&&!terrainBlocked(b).contains(next)&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
             double score=0;int nearest=targets.stream().mapToInt(p->distance(next.q(),next.r(),p.q(),p.r())).min().orElse(20),before=targets.stream().mapToInt(p->distance(from.q(),from.r(),p.q(),p.r())).min().orElse(20);
             score+=(ranged?(Math.abs(before-(behavior.equals("cautious")?4:3))-Math.abs(nearest-(behavior.equals("cautious")?4:3))):(before-nearest))*2-0.4;
             if(pending!=null&&pending.kind().equals("aim"))score-=12;

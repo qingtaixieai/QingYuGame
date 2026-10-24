@@ -12,7 +12,7 @@ const kindName=(k:string)=>k==='corpse'?'尸体':k==='chest'?'宝箱':'掉落堆
 function remaining(expires:number|null,clock:number){if(expires===null)return '携带中 · 计时暂停';const s=Math.max(0,Math.ceil((expires-clock)/1000));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} 后消失`;}
 
 /** 单个容器的独立大页面：点尸体/宝箱/掉落堆 → 复用人物页模板展示。 */
-export function ContainerPage({version,battle,me,clock,connected,position,containerId,onClose,onChanged}:{version:string;battle:BattleState;me:string;clock:number;connected:boolean;position:Hex;containerId:string;onClose:()=>void;onChanged:()=>Promise<void>}){
+export function ContainerPage({version,battle,me,clock,connected,position,scenePosition,containerId,onClose,onChanged}:{version:string;battle:BattleState;me:string;clock:number;connected:boolean;position:Hex;scenePosition?:Hex|null;containerId:string;onClose:()=>void;onChanged:()=>Promise<void>}){
  const [container,setContainer]=useState<LootContainer|null>(null);
  const [contents,setContents]=useState<Item[]>([]);
  const [itemCode,setItemCode]=useState('');
@@ -22,7 +22,7 @@ export function ContainerPage({version,battle,me,clock,connected,position,contai
  const battleId=battle.active?battle.id:null,own=battle.active?battle.actors.find(a=>a.accountId===me):null;
  const query=`?version=${encodeURIComponent(version)}${battleId?'&battleId='+battleId:''}`;
  const selectedItem=contents.find(i=>i.code===itemCode)||contents[0];
- const sameCell=!!container&&(container.carrierId===me||(!battle.active?container.q===position.q&&container.r===position.r:container.battleQ===own?.q&&container.battleR===own?.r));
+ const sameCell=!!container&&(container.carrierId===me||(!battle.active?scenePosition?container.battleQ===scenePosition.q&&container.battleR===scenePosition.r:container.q===position.q&&container.r===position.r:container.battleQ===own?.q&&container.battleR===own?.r));
  const available=connected&&(!battle.active||battle.turnAccountId===me&&own?.character.life==='alive'&&battle.turnPoints>=2);
  const expired=container?.expiresAt!=null&&container.expiresAt<=clock;
  const canTake=available&&sameCell&&!expired&&!busy&&!loading;

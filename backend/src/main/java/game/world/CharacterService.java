@@ -71,7 +71,7 @@ public class CharacterService {
     private void give(UUID id,String code,int quantity){if(quantity<=0)return;equipment.give(id,code,quantity);}
     public EquipmentService.Loadout loadout(UUID id){return equipment.loadout(id);}
     public void requireAlive(UUID id){if(!get(id).alive())throw AccountService.bad("倒地或灵魂状态不能执行此行动");}
-    public void relocate(UUID id,int q,int r){var c=get(id);if(c.npc())db.update("update characters set q=?,r=? where id=?",q,r,id);else db.update("update accounts set q=?,r=? where id=?",q,r,id);}
+    public void relocate(UUID id,int q,int r){var c=get(id);if(c.q()!=q||c.r()!=r)db.update("delete from world_arrivals where character_id=?",id);if(c.npc())db.update("update characters set q=?,r=? where id=?",q,r,id);else db.update("update accounts set q=?,r=? where id=?",q,r,id);}
     public void cancelTimer(UUID id){db.update("update characters set timer_kind=null,timer_end=0 where id=? and life<>'dead'",id);}
     public void hostile(UUID id){db.update("update characters set protected_until=0 where id=?",id);cancelTimer(id);}
     public String damage(UUID id,int amount,long now){

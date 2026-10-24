@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** Explicitly opt in with a disposable local database, never a development or production database. */
 @SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT)
+@org.springframework.test.annotation.DirtiesContext(classMode=org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 @EnabledIfEnvironmentVariable(named="PHASE1_DATABASE_URL",matches="jdbc:postgresql://127\\.0\\.0\\.1:[0-9]+/qingyu_phase1_[a-z0-9_]+")
 class PhaseOneIntegrationTest {
     @DynamicPropertySource static void config(DynamicPropertyRegistry r){
