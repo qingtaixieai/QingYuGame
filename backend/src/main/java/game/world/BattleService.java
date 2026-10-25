@@ -8,6 +8,7 @@ import java.util.*;
 /** Server-owned tactical encounters. WorldService serializes commands and commits them before broadcasting. */
 @Service
 public class BattleService {
+    @org.springframework.beans.factory.annotation.Autowired private ProductionService production;
     public static final int RADIUS=6;
     private static final int TURN_POINTS=6;
     public static final List<WorldMap.Hex> DIRECTIONS=List.of(new WorldMap.Hex(1,0),new WorldMap.Hex(0,1),new WorldMap.Hex(-1,1),new WorldMap.Hex(-1,0),new WorldMap.Hex(0,-1),new WorldMap.Hex(1,-1));
@@ -189,7 +190,7 @@ public class BattleService {
         characters.hostile(actor);
         for(int i=0;i<participants.size();i++){UUID user=participants.get(i);if(engaged(user))throw bad("同格角色已在其他战斗中");var cell=sceneRuntime.position(user).hex();
             db.update("insert into battle_actors(encounter_id,account_id,q,r,initiative,entry_round) values(?,?,?,?,?,1)",id,user,cell.q(),cell.r(),i);}
-        for(UUID user:participants){characters.cancelTimer(user);db.update("update battle_actors set initiative_roll=?,initiative_score=? where encounter_id=? and account_id=?",rolls.get(user),rolls.get(user)+Math.floorDiv(characters.get(user).agility()-10,2),id,user);}
+        for(UUID user:participants){production.cancel(user);characters.cancelTimer(user);db.update("update battle_actors set initiative_roll=?,initiative_score=? where encounter_id=? and account_id=?",rolls.get(user),rolls.get(user)+Math.floorDiv(characters.get(user).agility()-10,2),id,user);}
         db.update("update battle_encounters set next_initiative=?,turn_account_id=? where id=?",participants.size(),participants.getFirst(),id);
         event(id,"start",actor,target,null,null,now);
         for(UUID participant:participants)db.update("insert into battle_members values(?,?) on conflict do nothing",id,participant);
@@ -235,6 +236,7 @@ public class BattleService {
         Collections.shuffle(cells);return cells.isEmpty()?null:cells.getFirst();
     }
     private void enter(UUID actor,Encounter b,int direction,long now){
+        production.cancel(actor);
         var spawn=entryCell(b,direction);if(spawn==null)throw bad("该方向的战场入口已满，请稍后再试");
         var sceneId=sceneId(b);if(sceneId!=null)sceneRuntime.put(actor,sceneId,spawn);else sceneRuntime.leave(actor);
         int roll=1+new java.security.SecureRandom().nextInt(20),score=roll+Math.floorDiv(characters.get(actor).agility()-10,2);
@@ -262,7 +264,7 @@ public class BattleService {
         // Remove first: damage can down/kill an actor and cancel its other pending actions.
         if(db.update("delete from battle_intents where encounter_id=? and attacker_id=?",battle,intent.attackerId())==0)return;
         boolean hit=false;
-        for(var p:new ArrayList<>(positions(battle)))if(!p.id().equals(intent.attackerId())&&intent.cells().contains(new WorldMap.Hex(p.q(),p.r()))){hit(battle,intent.attackerId(),p.id(),p.q(),p.r(),intent.damage(),now);hit=true;}
+        for(var p:new ArrayList<>(positions(battle)))if(!p.id().equals(intent.attackerId())&&intent.cells().contains(new WorldMap.Hex(p.q(),p.r()))){hit(battle,intent.attackerId(),p.id(),p.q(),p.r(),intent.damage(),now,true);hit=true;}
         if(!hit)event(battle,"miss",intent.attackerId(),null,intent.q(),intent.r(),now);
     }
     private void requireStanding(UUID actor){characters.requireAlive(actor);}
@@ -475,10 +477,12 @@ public class BattleService {
         if(!characters.get(actor).alive())db.update("update battle_encounters set turn_points=0 where id=?",battle);
         return false;
     }
-    private int hit(UUID battle,UUID attacker,UUID target,int q,int r,int damage,long now){
+    private int hit(UUID battle,UUID attacker,UUID target,int q,int r,int damage,long now){return hit(battle,attacker,target,q,r,damage,now,false);}
+    private int hit(UUID battle,UUID attacker,UUID target,int q,int r,int damage,long now,boolean weaponAttack){
         var defense=characters.loadout(target);
-        int afterArmor=Math.max(1,damage-defense.armor());
-        int effective=effectiveDamage(battle,target,damage);
+        int piercing=weaponAttack?db.queryForObject("select coalesce((select armor_piercing from item_definitions where code=?),0)",Integer.class,characters.weapon(attacker).code()):0;
+        int afterArmor=Math.max(1,damage-Math.max(0,defense.armor()-piercing));
+        int effective=effectiveDamage(battle,target,damage,piercing);
         var priorStatuses=statuses.list(target);
         String result=effective<=0?"hit":characters.damage(target,effective,now);
         if(result.equals("protected"))return 0;
@@ -490,10 +494,10 @@ public class BattleService {
             event(battle,"withdraw-interrupted",target,attacker,q,r,now);
         return effective;
     }
-    private int effectiveDamage(UUID battle,UUID target,int damage){
+    private int effectiveDamage(UUID battle,UUID target,int damage,int piercing){
         if(damage<=0)return 0;
         var loadout=characters.loadout(target);
-        int afterArmor=Math.max(0,damage-loadout.armor());
+        int afterArmor=Math.max(0,damage-Math.max(0,loadout.armor()-piercing));
         if(damage>0&&afterArmor==0)afterArmor=1;
         Integer rp=db.queryForObject("select reaction_points from battle_actors where encounter_id=? and account_id=?",Integer.class,battle,target);
         Boolean raised=db.queryForObject("select shield_raised from battle_actors where encounter_id=? and account_id=?",Boolean.class,battle,target);

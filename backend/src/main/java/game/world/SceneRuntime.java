@@ -11,6 +11,7 @@ public class SceneRuntime {
     public record Position(UUID characterId,UUID sceneId,int q,int r){public WorldMap.Hex hex(){return new WorldMap.Hex(q,r);}}
     private final JdbcTemplate db;private final SceneService scenes;private final CharacterService characters;
     private final JsonMapper json=JsonMapper.builder().build();
+    @org.springframework.beans.factory.annotation.Autowired private SceneContentService content;
     SceneRuntime(JdbcTemplate db,SceneService scenes,CharacterService characters){this.db=db;this.scenes=scenes;this.characters=characters;}
     public SceneMap map(UUID id){return db.queryForList("select document from scene_documents where id=?",String.class,id).stream().map(d->json.readValue(d,SceneMap.class)).findFirst().orElseThrow(()->AccountService.bad("场景已不存在"));}
     public Position position(UUID actor){return db.query("select character_id,scene_id,q,r from scene_positions where character_id=? and active",(r,n)->new Position(r.getObject(1,UUID.class),r.getObject(2,UUID.class),r.getInt(3),r.getInt(4)),actor).stream().findFirst().orElse(null);}
@@ -20,7 +21,7 @@ public class SceneRuntime {
     public SceneMap outdoor(WorldMap world,WorldMap.Hex owner){
         var id=UUID.nameUUIDFromBytes((world.version()+":outdoor:"+owner.q()+":"+owner.r()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         var saved=db.queryForList("select document from scene_documents where id=? and world_version=?",String.class,id,world.version());
-        if(!saved.isEmpty())return json.readValue(saved.getFirst(),SceneMap.class);
+        if(!saved.isEmpty())return content.ensure(json.readValue(saved.getFirst(),SceneMap.class),world);
         var tile=world.index().get(owner);if(tile==null||!tile.walkable())throw AccountService.bad("此地不能进入");
         var base=SceneMap.outdoor(world,owner,15);var cells=new ArrayList<SceneMap.Cell>();
         for(var cell:base.cells()){
@@ -28,7 +29,7 @@ public class SceneRuntime {
             String terrain=switch(tile.terrain()){case "beach"->"sand";case "mountain","hill"->"rock";case "bridge"->"paving";default->variation<2?"dirt":"grass";};
             cells.add(new SceneMap.Cell(cell.q(),cell.r(),terrain,true));
         }
-        var result=new SceneMap(id,world.version(),2,2,owner,base.name(),15,cells);scenes.save(result);return result;
+        var result=new SceneMap(id,world.version(),2,2,owner,base.name(),15,cells);scenes.save(result);return content.ensure(result,world);
     }
     public void arrived(UUID actor,String version,WorldMap.Hex from,WorldMap.Hex to){
         if(WorldMap.distance(from,to)!=1){db.update("delete from world_arrivals where character_id=?",actor);return;}

@@ -13,6 +13,9 @@ public class GameController {
     GameController(AccountService accounts,WorldService world,ModerationService moderation){this.moderation=moderation;this.accounts=accounts;this.world=world;}
     record EmoteRequest(String code,String version) {}
     record Credentials(String username,String password) {}
+    @GetMapping("/production") public Object production(HttpServletRequest req){return world.production(accounts.require(req,true,false).id());}
+    @PostMapping("/production/start") public Object productionStart(@RequestBody ProductionService.Start body,HttpServletRequest req){world.startProduction(accounts.require(req,true,false).id(),body);return Map.of("message","任务已开始");}
+    @PostMapping("/production/cancel") public Object productionCancel(HttpServletRequest req){world.cancelProduction(accounts.require(req,true,false).id());return Map.of("message","任务已取消，未用材料已释放");}
     record Move(Integer q,Integer r,String version) {}
     record Approval(boolean approved) {}
     record Password(String password) {}

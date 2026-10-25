@@ -73,7 +73,7 @@ public class EquipmentService {
         if(main!=null&&!main.equals(oldMain)&&!main.equals(oldOff))need.merge(main,1,Integer::sum);
         if(off!=null&&!off.equals(oldMain)&&!off.equals(oldOff))need.merge(off,1,Integer::sum);
         if(body!=null&&!body.equals(oldBody))need.merge(body,1,Integer::sum);
-        for(var e:need.entrySet())if(db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",e.getValue(),id,e.getKey(),e.getValue())==0)throw AccountService.bad("背包中缺少需要装备的物品");
+        for(var e:need.entrySet())consume(id,e.getKey(),e.getValue());
         if(oldMain!=null&&!oldMain.equals(main)&&!oldMain.equals(off))give(id,oldMain,1);
         if(oldOff!=null&&!oldOff.equals(main)&&!oldOff.equals(off))give(id,oldOff,1);
         if(oldBody!=null&&!oldBody.equals(body))give(id,oldBody,1);
@@ -87,7 +87,8 @@ public class EquipmentService {
         db.update("insert into inventories(character_id,item_code,quantity) values(?,?,?) on conflict(character_id,item_code) do update set quantity=inventories.quantity+excluded.quantity",id,code,quantity);
     }
     public void consume(UUID id,String code,int quantity){
-        if(db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",quantity,id,code,quantity)==0)throw AccountService.bad("背包中没有可用物品");
+        if(quantity<1||db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity-reserved_quantity(character_id,item_code)>=?",quantity,id,code,quantity)==0)throw AccountService.bad("背包中没有足够可用物品，预留材料不能使用");
     }
-    public boolean has(UUID id,String code){return Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from inventories where character_id=? and item_code=? and quantity>0)",Boolean.class,id,code));}
+    public long available(UUID id,String code){return db.queryForObject("select coalesce((select quantity-reserved_quantity(character_id,item_code) from inventories where character_id=? and item_code=?),0)",Long.class,id,code);}
+    public boolean has(UUID id,String code){return available(id,code)>0;}
 }

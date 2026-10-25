@@ -46,6 +46,7 @@ public class CharacterService {
     /** 生物（NPC）装备与背包：出生/重生时刷新。恶霸使斧、背包各 1-4 石木；利爪怪用爪（weapon 置空走 fallback）、各 0-3 石木；绷带均 0-2。与玩家共用同一套背包。 */
     public void kit(UUID id){
         var c=get(id);
+        db.update("delete from production_tasks where actor_id=?",id);
         db.update("delete from inventories where character_id=?",id);
         if("archer".equals(c.species())){
             db.update("update characters set weapon='short_bow',offhand=null,body='light_armor' where id=?",id);

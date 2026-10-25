@@ -35,9 +35,14 @@ public class WorldService {
     @org.springframework.beans.factory.annotation.Autowired private StatusService statuses;
     @org.springframework.beans.factory.annotation.Autowired private ShopService shops;
     @org.springframework.beans.factory.annotation.Autowired private SceneService scenes;
+    @org.springframework.beans.factory.annotation.Autowired private ProductionService production;
+    @org.springframework.beans.factory.annotation.Autowired private SceneContentService content;
+    public synchronized Object production(UUID actor){return production.view(actor);}
+    public synchronized void startProduction(UUID actor,ProductionService.Start request){sceneReady(actor,world.version());if(!characters.get(actor).npc()&&!onlineUsers().contains(actor))throw AccountService.bad("请先连接游戏世界");if(routes.containsKey(actor)||sceneRoutes.containsKey(actor))throw AccountService.bad("请先停下再开始任务");tx.executeWithoutResult(s->production.start(actor,world,request,System.currentTimeMillis()));broadcast();}
+    public synchronized void cancelProduction(UUID actor){tx.executeWithoutResult(s->production.cancel(actor));broadcast();}
     private void requireShop(UUID id){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中不能交易");if(routes.containsKey(id))throw AccountService.bad("请先停下");var tile=world.index().get(characters.get(id).hex());if(tile==null||tile.place()==null||!tile.place().type().equals("town"))throw AccountService.bad("请先到达城镇");}
     public synchronized Object shop(UUID id){sceneRuntime.requireWorld(id);requireShop(id);return shops.view(id);}
-    public synchronized Object trade(UUID id,ShopService.Order order){sceneRuntime.requireWorld(id);requireShop(id);var result=tx.execute(s->{var out=shops.transact(id,order);hotbar.sync(id);return out;});battleRevision++;broadcast();return result;}
+    public synchronized Object trade(UUID id,ShopService.Order order){var result=tx.execute(s->{var saved=shops.replay(id,order);if(saved!=null)return saved;sceneRuntime.requireWorld(id);requireShop(id);var out=shops.transact(id,order);hotbar.sync(id);return out;});battleRevision++;broadcast();return result;}
     WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment,HotbarService hotbar,LootService loot,SkillService skills){this.skills=skills;this.loot=loot;this.hotbar=hotbar;this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
     @PostConstruct void load(){
         var rows=db.queryForList("select document from worlds where id=1",String.class);
@@ -51,6 +56,7 @@ public class WorldService {
         tx.executeWithoutResult(s->{
             // Unfinished long actions are interrupted on process restart, never completed offline.
             db.update("delete from world_actions");
+            production.restart();
             db.update("update characters set timer_kind=null,timer_end=0 where timer_kind='rest'");
             if(!previous.version().equals(world.version())){
                 db.update("update worlds set document=? where id=1",json.writeValueAsString(world));
@@ -69,22 +75,22 @@ public class WorldService {
     private void sceneReady(UUID actor,String version){if(!world.version().equals(version))throw AccountService.bad("世界已更新");characters.requireAlive(actor);ferry.requireAshore(actor);if(battles.engaged(actor))throw AccountService.bad("战斗中请使用战斗行动与撤离");if(!characters.get(actor).npc()&&!accounts.get(actor).approved())throw AccountService.bad("游戏权限已撤销");}
     public synchronized void enterScene(UUID actor,String version){
         sceneReady(actor,version);if(routes.containsKey(actor))throw AccountService.bad("请先停下再进入");
-        tx.executeWithoutResult(s->{var c=characters.get(actor);var existing=battles.summaries(version).stream().filter(b->b.q()==c.q()&&b.r()==c.r()).findFirst();if(existing.isPresent())battles.join(actor,existing.get().id(),version,world,System.currentTimeMillis());else{var map=sceneRuntime.outdoor(world,c.hex());sceneRuntime.enter(actor,map,false,sceneRuntime.incoming(actor,map));}resources.cancel(actor);characters.cancelTimer(actor);});
+        tx.executeWithoutResult(s->{var c=characters.get(actor);var existing=battles.summaries(version).stream().filter(b->b.q()==c.q()&&b.r()==c.r()).findFirst();if(existing.isPresent())battles.join(actor,existing.get().id(),version,world,System.currentTimeMillis());else{var map=sceneRuntime.outdoor(world,c.hex());sceneRuntime.enter(actor,map,false,sceneRuntime.incoming(actor,map));}production.cancel(actor);resources.cancel(actor);characters.cancelTimer(actor);});
         sceneRoutes.remove(actor);battleRevision++;broadcast();
     }
-    public synchronized void leaveScene(UUID actor,String version){sceneReady(actor,version);tx.executeWithoutResult(s->{var p=sceneRuntime.position(actor);if(p==null)return;if(sceneRuntime.map(p.sceneId()).level()!=2)throw AccountService.bad("室内必须从门离开");sceneRuntime.leave(actor);resources.cancel(actor);characters.cancelTimer(actor);});sceneRoutes.remove(actor);battleRevision++;broadcast();}
+    public synchronized void leaveScene(UUID actor,String version){sceneReady(actor,version);tx.executeWithoutResult(s->{var p=sceneRuntime.position(actor);if(p==null)return;if(sceneRuntime.map(p.sceneId()).level()!=2)throw AccountService.bad("室内必须从门离开");sceneRuntime.leave(actor);production.cancel(actor);resources.cancel(actor);characters.cancelTimer(actor);});sceneRoutes.remove(actor);battleRevision++;broadcast();}
     public synchronized void crossScene(UUID actor,int direction,String version){
         sceneReady(actor,version);if(direction<0||direction>5)throw AccountService.bad("方向无效");
         tx.executeWithoutResult(s->{var p=sceneRuntime.position(actor);if(p==null)throw AccountService.bad("请先进入二级地图");var map=sceneRuntime.map(p.sceneId());if(!SceneRuntime.sides(p.hex(),map.radius()).contains(direction))throw AccountService.bad("请先走到对应边缘");
             var d=BattleService.DIRECTIONS.get(direction);var to=new WorldMap.Hex(map.owner().q()+d.q(),map.owner().r()+d.r());if(!scenes.open(map.owner(),to))throw AccountService.bad("通道已封闭");
             var existing=battles.summaries(version).stream().filter(b->b.q()==to.q()&&b.r()==to.r()).findFirst();
             if(existing.isPresent())battles.join(actor,existing.get().id(),version,world,System.currentTimeMillis());else{var target=sceneRuntime.outdoor(world,to);var cell=SceneRuntime.edgeCell(target,(direction+3)%6,sceneRuntime.occupied(target.id(),actor));if(cell==null)throw AccountService.bad("对应边缘没有合法空位");sceneRuntime.put(actor,target.id(),cell);characters.relocate(actor,to.q(),to.r());}
-            sceneRuntime.arrived(actor,version,map.owner(),to);resources.cancel(actor);characters.cancelTimer(actor);
+            sceneRuntime.arrived(actor,version,map.owner(),to);production.cancel(actor);resources.cancel(actor);characters.cancelTimer(actor);
         });sceneRoutes.remove(actor);battleRevision++;broadcast();
     }
     public synchronized List<WorldMap.Hex> moveScene(UUID actor,int q,int r,String version){
         sceneReady(actor,version);sceneRoutes.remove(actor);var p=sceneRuntime.position(actor);if(p==null)throw AccountService.bad("请先进入二级地图");var target=new WorldMap.Hex(q,r);if(p.hex().equals(target)){broadcast();return List.of();}
-        var path=sceneRuntime.path(actor,target);if(path.isEmpty())throw AccountService.bad("此处不可到达");tx.executeWithoutResult(s->{resources.cancel(actor);characters.cancelTimer(actor);});sceneRoutes.put(actor,new SceneRoute(p.sceneId(),new ArrayDeque<>(path)));broadcast();return path;
+        var path=sceneRuntime.path(actor,target);if(path.isEmpty())throw AccountService.bad("此处不可到达");tx.executeWithoutResult(s->{production.moving(actor);resources.cancel(actor);characters.cancelTimer(actor);});sceneRoutes.put(actor,new SceneRoute(p.sceneId(),new ArrayDeque<>(path)));broadcast();return path;
     }
     public synchronized Map<String,Object> snapshot(){return snapshot(null);}
     public synchronized Map<String,Object> snapshot(UUID viewer){
@@ -104,7 +110,7 @@ public class WorldService {
         var local=viewer==null?null:sceneRuntime.position(viewer);out.put("scenePosition",local);
         if(local!=null&&!battling.contains(viewer))out.put("sceneLoot",loot.nearby(new LootService.Context(viewer,world.version(),viewing.q(),viewing.r(),null,null,null),System.currentTimeMillis()));
         if(local!=null){out.put("sceneMoving",sceneRoutes.containsKey(viewer));out.put("sceneResidents",sceneRuntime.residents(local.sceneId()).stream().map(p->{var c=characters.get(p.characterId());return Map.of("id",p.characterId(),"q",p.q(),"r",p.r(),"username",c.name(),"life",c.life(),"hp",c.hp(),"maxHp",c.maxHp(),"kind",c.kind());}).toList());}
-        if(viewing!=null){out.put("character",viewing);out.put("inventory",resources.inventory(viewer));out.put("carriedCorpses",loot.carried(viewer));}return out;
+        if(viewing!=null){out.put("character",viewing);out.put("inventory",resources.inventory(viewer));out.put("carriedCorpses",loot.carried(viewer));out.put("production",production.view(viewer));if(local!=null)out.put("sceneObjects",content.objects(local.sceneId(),System.currentTimeMillis()));}return out;
     }
     public synchronized AccountService.Account register(String name,String pass){return tx.execute(s->{var a=accounts.register(name,pass,world.spawn());characters.ensurePlayers();equipment.give(a.id(),"copper_coin",30);return a;});}
     public synchronized List<WorldMap.Hex> move(UUID id,int q,int r,String version){
@@ -123,7 +129,7 @@ public class WorldService {
         if(!soul)battles.summaries(world.version()).forEach(b->available.remove(new WorldMap.Hex(b.q(),b.r())));
         List<WorldMap.Hex> path=WorldMap.path(available,from,target,false,scenes::open);
         if(path.isEmpty())throw AccountService.bad("无法到达这里，请选择陆地或经桥梁绕行");
-        tx.executeWithoutResult(s->{resources.cancel(id);characters.cancelTimer(id);});
+        tx.executeWithoutResult(s->{production.moving(id);resources.cancel(id);characters.cancelTimer(id);});
         routes.put(id,new ArrayDeque<>(path));broadcast();return path;
     }
     public synchronized void stop(UUID id){
@@ -147,13 +153,13 @@ public class WorldService {
     public synchronized void disconnect(String socketId){
         Connection c=connections.remove(socketId);
         if(c!=null && connections.values().stream().noneMatch(x->x.user.equals(c.user))){
-            routes.remove(c.user);sceneRoutes.remove(c.user);characters.cancelTimer(c.user);
+            routes.remove(c.user);sceneRoutes.remove(c.user);tx.executeWithoutResult(s->production.cancel(c.user));characters.cancelTimer(c.user);
             if(battles.engaged(c.user))battleRevision++;
         }
         broadcast();
     }
     public synchronized void closeUser(UUID id){
-        routes.remove(id);sceneRoutes.remove(id);emotes.remove(id);characters.cancelTimer(id);
+        routes.remove(id);sceneRoutes.remove(id);tx.executeWithoutResult(s->production.cancel(id));emotes.remove(id);characters.cancelTimer(id);
         var matches=connections.entrySet().stream().filter(e->e.getValue().user.equals(id)).toList();
         for(var e:matches){connections.remove(e.getKey());try{e.getValue().socket.close(CloseStatus.POLICY_VIOLATION);}catch(Exception ignored){}}
         if(!matches.isEmpty()&&battles.engaged(id))battleRevision++;
@@ -172,7 +178,7 @@ public class WorldService {
     public synchronized WorldMap regenerate(UUID actor){
         WorldMap next=WorldMap.expand(WorldMap.generate(new SecureRandom().nextLong()));
         tx.executeWithoutResult(s->{db.update("update worlds set document=? where id=1",json.writeValueAsString(next));
-            db.update("update accounts set q=?,r=?",next.spawn().q(),next.spawn().r());resources.reset(next);loot.resetGround();battles.reset();ferry.reset(next,System.currentTimeMillis());characters.reset(next,System.currentTimeMillis());audit(actor,"regenerate",next.version());});
+            production.restart();db.update("update accounts set q=?,r=?",next.spawn().q(),next.spawn().r());resources.reset(next);loot.resetGround();battles.reset();ferry.reset(next,System.currentTimeMillis());characters.reset(next,System.currentTimeMillis());audit(actor,"regenerate",next.version());});
         world=next;battles.world(world);scenes.initialize(world.version());routes.clear();sceneRoutes.clear();sceneRuntime.reconcile(world);emotes.clear();battleRevision++;broadcast();return world;
     }
     private LootService.Context lootContext(UUID id,String version,UUID battleId){
@@ -197,16 +203,7 @@ public class WorldService {
     }
     public synchronized List<Map<String,Object>> inventory(UUID id){accounts.get(id);return resources.inventory(id);}
     public synchronized Map<String,String> collect(UUID id,int q,int r,String version){
-        sceneRuntime.requireWorld(id);
-        characters.requireAlive(id);
-        if(!world.version().equals(version))throw AccountService.bad("世界已更新，请刷新地图后重试");
-        var a=accounts.get(id);
-        if(!a.approved())throw AccountService.bad("游戏权限已被撤销");
-        ferry.requireAshore(id);
-        if(battles.engaged(id))throw AccountService.bad("角色正在战斗中，不能在大世界采集");
-        if(a.q()!=q||a.r()!=r||routes.containsKey(id))throw AccountService.bad("请先到达资源所在格子并停下");
-        String message=tx.execute(s->{characters.hostile(id);return resources.collect(id,q,r,System.currentTimeMillis());});
-        broadcast();return Map.of("message",message);
+        throw AccountService.bad("一级地图只显示资源概况，请进入二级地图后同格采集");
     }
     private AccountService.Account requireFerryAction(UUID id,String version){
         sceneRuntime.requireWorld(id);
@@ -293,7 +290,7 @@ public class WorldService {
         var a=accounts.login(name,password,req,res);closeInvalidSessions();broadcast();return a;
     }
     private void closeInvalidSessions(){
-        for(var entry:List.copyOf(connections.entrySet())){var c=entry.getValue();try{accounts.authenticate(c.token);moderation.requireGame(c.user,c.ip);}catch(Exception e){connections.remove(entry.getKey());try{c.socket.close(CloseStatus.POLICY_VIOLATION);}catch(Exception ignored){}if(connections.values().stream().noneMatch(x->x.user.equals(c.user))){routes.remove(c.user);sceneRoutes.remove(c.user);if(battles.engaged(c.user))battleRevision++;}}}
+        for(var entry:List.copyOf(connections.entrySet())){var c=entry.getValue();try{accounts.authenticate(c.token);moderation.requireGame(c.user,c.ip);}catch(Exception e){connections.remove(entry.getKey());try{c.socket.close(CloseStatus.POLICY_VIOLATION);}catch(Exception ignored){}if(connections.values().stream().noneMatch(x->x.user.equals(c.user))){routes.remove(c.user);sceneRoutes.remove(c.user);tx.executeWithoutResult(s->production.cancel(c.user));if(battles.engaged(c.user))battleRevision++;}}}
     }
     public synchronized void notifyChat(Set<UUID> users){
         var payload=new TextMessage("{\"type\":\"chat-changed\"}");
@@ -323,13 +320,14 @@ public class WorldService {
         if(lifeChanged)battleRevision++;
         boolean monstersChanged=Boolean.TRUE.equals(tx.execute(s->{sceneRuntime.reconcile(world);var excluded=battles.actorIds();excluded.addAll(sceneRuntime.activeActors());return characters.wander(now,excluded);}));
         boolean sceneChanged=Boolean.TRUE.equals(tx.execute(s->{boolean changed=false;for(var entry:new ArrayList<>(sceneRoutes.entrySet())){UUID actor=entry.getKey();var route=entry.getValue();if(battles.engaged(actor)||!characters.get(actor).alive()||route.steps().isEmpty()){sceneRoutes.remove(actor);changed=true;continue;}var next=route.steps().remove();if(!sceneRuntime.step(actor,route.sceneId(),next)||route.steps().isEmpty())sceneRoutes.remove(actor);changed=true;}
-            for(UUID actor:sceneRuntime.activeActors()){var c=characters.get(actor);if(!c.npc()||!c.alive()||battles.engaged(actor)||db.queryForObject("select next_move from characters where id=?",Long.class,actor)>now)continue;var p=sceneRuntime.position(actor);var options=new ArrayList<>(p.hex().neighbors());Collections.shuffle(options);for(var next:options)if(sceneRuntime.step(actor,p.sceneId(),next)){changed=true;break;}db.update("update characters set next_move=? where id=?",now+4000,actor);}return changed;}));
+            for(UUID actor:sceneRuntime.activeActors()){var c=characters.get(actor);if(!c.npc()||!c.alive()||production.current(actor)!=null||battles.engaged(actor)||db.queryForObject("select next_move from characters where id=?",Long.class,actor)>now)continue;var p=sceneRuntime.position(actor);var options=new ArrayList<>(p.hex().neighbors());Collections.shuffle(options);for(var next:options)if(sceneRuntime.step(actor,p.sceneId(),next)){changed=true;break;}db.update("update characters set next_move=? where id=?",now+4000,actor);}return changed;}));
         boolean encounterChanged=Boolean.TRUE.equals(tx.execute(s->monsterEncounters(now)));
         if(encounterChanged)battleRevision++;
         boolean ferryChanged=Boolean.TRUE.equals(tx.execute(s->ferry.advance(now)));
         boolean lootChanged=Boolean.TRUE.equals(tx.execute(s->loot.expire(now)));
         if(lootChanged)battleRevision++;
-        boolean resourcesChanged=Boolean.TRUE.equals(tx.execute(s->resources.advance(world,now)))||lootChanged;
+        boolean workChanged=Boolean.TRUE.equals(tx.execute(s->{boolean changed=production.advance(now);return content.refreshStones(now)||changed;}));
+        boolean resourcesChanged=Boolean.TRUE.equals(tx.execute(s->resources.advance(world,now)))||lootChanged||workChanged;
         boolean battlesChanged=Boolean.TRUE.equals(tx.execute(s->battles.advance(onlineUsers(),now)));
         if(battlesChanged){battleRevision++;for(var c:characters.all())if(!c.alive()){if(!c.life().equals("soul"))routes.remove(c.id());resources.cancel(c.id());}}
         if(tick%60==0){
@@ -391,7 +389,7 @@ public class WorldService {
                 switch(action){
                     case "antidote" -> {characters.requireAlive(id);if(!statuses.has(id,"poison"))throw AccountService.bad("当前没有中毒");equipment.consume(id,"antidote",1);statuses.remove(id,"poison");}
                     case "bind" -> characters.bind(id);
-                    case "rest","recall" -> {resources.cancel(id);characters.begin(id,action,now);}
+                    case "rest","recall" -> {if(production.current(id)!=null)throw AccountService.bad("已有持续任务，请先取消");resources.cancel(id);characters.begin(id,action,now);}
                     case "revive" -> {characters.returnToMark(id,now);battles.rejoinAtCell(id,now);}
                     case "cancel" -> characters.cancelTimer(id);
                     case "rescue" -> {characters.requireAlive(id);var a=characters.get(id);var t=characters.get(target);if(t.npc()||!a.hex().equals(t.hex())||battles.engaged(target))throw AccountService.bad("请与倒地旅人处于同一世界格");characters.rescue(target);}
@@ -420,6 +418,6 @@ public class WorldService {
         List<String> dead=new ArrayList<>();
         connections.forEach((key,c)->{try{if(c.socket.isOpen())c.socket.sendMessage(new TextMessage(json.writeValueAsString(snapshot(c.user))));else dead.add(key);}catch(Exception e){dead.add(key);}});
         for(String id:dead){Connection c=connections.remove(id);if(c!=null){try{c.socket.close();}catch(Exception ignored){}
-            if(connections.values().stream().noneMatch(x->x.user.equals(c.user))){routes.remove(c.user);sceneRoutes.remove(c.user);if(battles.engaged(c.user))battleRevision++;}}}
+            if(connections.values().stream().noneMatch(x->x.user.equals(c.user))){routes.remove(c.user);sceneRoutes.remove(c.user);tx.executeWithoutResult(s->production.cancel(c.user));if(battles.engaged(c.user))battleRevision++;}}}
     }
 }

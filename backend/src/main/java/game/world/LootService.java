@@ -35,11 +35,13 @@ public class LootService {
     }
     public List<Map<String,Object>> contents(UUID id,Context c,long now){require(id,c,now);return db.queryForList("select d.*,i.quantity from loot_items i join item_definitions d on d.code=i.item_code where i.container_id=? order by d.code",id);}
     public void createCorpse(CharacterService.Character c,String version,long now){
+        db.update("delete from production_tasks where actor_id=?",c.id());
         // Player source schema is reserved, but player death deliberately produces no corpse or drops.
         if(!c.npc())return;
         UUID id=UUID.randomUUID();
         db.update("insert into loot_containers(id,kind,name,source_kind,source_id,world_version,q,r,created_at,expires_at,strength,agility,constitution,intellect,perception,willpower) values(?,'corpse',?,'monster',?,?,?,?,?,?,?,?,?,?,?,?)",id,c.name()+"的尸体",c.id(),version,c.q(),c.r(),now,now+GROUND_LIFETIME,c.strength(),c.agility(),c.constitution(),c.intellect(),c.perception(),c.willpower());
         db.update("update loot_containers set source_species=? where id=?",c.species(),id);
+        db.update("update loot_containers set skinnable=exists(select 1 from creature_harvest where species=?) where id=?",c.species(),id);
         db.update("update loot_containers c set battle_id=a.encounter_id,battle_q=a.q,battle_r=a.r from battle_actors a join battle_encounters b on b.id=a.encounter_id where c.id=? and a.account_id=? and b.active=true",id,c.id());
         markScene(id,c.id());
         // 生物背包物品随尸体掉落；装备的武器也一并进入尸体供玩家拾取。
@@ -59,7 +61,7 @@ public class LootService {
     }
     public void closeBattle(UUID id){db.update("update loot_containers set battle_id=null,battle_q=case when scene_id is null then null else battle_q end,battle_r=case when scene_id is null then null else battle_r end where battle_id=?",id);}
     private void markScene(UUID container,UUID actor){db.update("update loot_containers set scene_id=null,battle_q=null,battle_r=null where id=? and battle_id is null",container);db.update("update loot_containers c set scene_id=p.scene_id,battle_q=p.q,battle_r=p.r from scene_positions p where c.id=? and p.character_id=? and p.active",container,actor);}
-    public boolean expire(long now){return db.update("delete from loot_containers where carrier_id is null and expires_at<=?",now)>0;}
+    public boolean expire(long now){return db.update("delete from loot_containers c where carrier_id is null and expires_at<=? and not exists(select 1 from production_tasks t where t.corpse_id=c.id)",now)>0;}
     public void resetGround(){db.update("delete from loot_containers where carrier_id is null");}
     public void execute(Context c,Command cmd,long now){
         if(cmd.action()==null)throw AccountService.bad("请选择操作");
@@ -68,22 +70,24 @@ public class LootService {
             var drops=cmd.items()==null?List.<ItemDrop>of():cmd.items();
             if(drops.isEmpty())throw AccountService.bad("请选择要丢弃的物品");
             for(var d:drops){int amount=d.quantity()==null?0:d.quantity();if(amount<1)throw AccountService.bad("请输入有效数量");
-                if(db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity>=?",amount,c.actor(),d.code(),amount)!=1)throw AccountService.bad("背包物品数量不足");}
+                if(db.update("update inventories set quantity=quantity-? where character_id=? and item_code=? and quantity-reserved_quantity(character_id,item_code)>=?",amount,c.actor(),d.code(),amount)!=1)throw AccountService.bad("背包可用物品数量不足");}
             UUID id=UUID.randomUUID();db.update("insert into loot_containers(id,kind,name,world_version,q,r,created_at,expires_at) values(?,'pile','掉落堆',?,?,?,?,?)",id,c.version(),c.q(),c.r(),now,now+GROUND_LIFETIME);
             markScene(id,c.actor());
             for(var d:drops)db.update("insert into loot_items values(?,?,?)",id,d.code(),d.quantity());
             return;
         }
         var x=require(cmd.containerId(),c,now);
+        if(db.queryForObject("select exists(select 1 from production_tasks where corpse_id=?)",Boolean.class,x.id()))throw AccountService.bad("尸体正在剥皮，请先取消任务");
         switch(cmd.action()){
             case "carry" -> {
                 if(!x.kind().equals("corpse")||x.carrierId()!=null)throw AccountService.bad("只能搬走地上的尸体");
-                db.update("update loot_containers set carrier_id=?,expires_at=null,battle_id=null,battle_q=null,battle_r=null,scene_id=null where id=?",c.actor(),x.id());
+                if(x.itemCount()>0)throw AccountService.bad("请先取空尸体中的物品再收纳");
+                db.update("update loot_containers set carrier_id=?,remaining_ms=greatest(0,expires_at-?),expires_at=null,battle_id=null,battle_q=null,battle_r=null,scene_id=null where id=?",c.actor(),now,x.id());
             }
             case "dropCorpse" -> {
                 if(c.battleId()!=null)throw AccountService.bad("当前仅开放战斗外丢弃");
                 if(!Objects.equals(x.carrierId(),c.actor()))throw AccountService.bad("尸体不在你的背包中");
-                db.update("update loot_containers set carrier_id=null,world_version=?,q=?,r=?,expires_at=? where id=?",c.version(),c.q(),c.r(),now+GROUND_LIFETIME,x.id());
+                db.update("update loot_containers set carrier_id=null,world_version=?,q=?,r=?,expires_at=?+remaining_ms where id=?",c.version(),c.q(),c.r(),now,x.id());
                 markScene(x.id(),c.actor());
             }
             case "take","takeAll" -> {
@@ -99,6 +103,22 @@ public class LootService {
             }
             default -> throw AccountService.bad("不支持的遗留物操作");
         }
+    }
+    public void requireSkinnable(UUID id,Context context,long now){
+        var c=require(id,context,now);
+        if(!c.kind().equals("corpse")||!Boolean.TRUE.equals(db.queryForObject("select skinnable from loot_containers where id=?",Boolean.class,id)))throw AccountService.bad("只有指定毛皮兽的尸体可以剥皮");
+        if(db.queryForObject("select exists(select 1 from production_tasks where corpse_id=?)",Boolean.class,id))throw AccountService.bad("尸体正在被剥皮");
+    }
+    public void finishSkin(UUID id,UUID actor,boolean success,long now){
+        if(!db.queryForObject("select exists(select 1 from production_tasks where actor_id=? and corpse_id=? and kind='skin')",Boolean.class,actor,id))throw AccountService.bad("剥皮任务已失效");
+        var x=query("where id=? for update",id).getFirst();
+        if(x.itemCount()>0){
+            if(x.carrierId()!=null)throw AccountService.bad("携带尸体不能含有内部物品");
+            UUID bag=UUID.randomUUID();db.update("insert into loot_containers(id,kind,name,world_version,q,r,battle_id,battle_q,battle_r,scene_id,created_at,expires_at) select ?,'pile','剥皮遗留物',world_version,q,r,battle_id,battle_q,battle_r,scene_id,?,? from loot_containers where id=?",bag,now,now+GROUND_LIFETIME,id);
+            db.update("update loot_items set container_id=? where container_id=?",bag,id);
+        }
+        if(success)db.update("insert into inventories values(?,'hide',1) on conflict(character_id,item_code) do update set quantity=inventories.quantity+1",actor);
+        db.update("delete from loot_containers where id=?",id);
     }
     private void transfer(UUID actor,UUID container,String code,long amount,long remaining){
         db.update("insert into inventories values(?,?,?) on conflict(character_id,item_code) do update set quantity=inventories.quantity+excluded.quantity",actor,code,amount);
