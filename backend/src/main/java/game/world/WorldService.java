@@ -38,6 +38,16 @@ public class WorldService {
     @org.springframework.beans.factory.annotation.Autowired private ProductionService production;
     @org.springframework.beans.factory.annotation.Autowired private SceneContentService content;
     @org.springframework.beans.factory.annotation.Autowired private TownService towns;
+    @org.springframework.beans.factory.annotation.Autowired private HandoverService handovers;
+    @org.springframework.beans.factory.annotation.Autowired private LawService law;
+    public synchronized Object handovers(UUID actor){tx.executeWithoutResult(s->handovers.prune(onlineUsers()));return handovers.view(actor);}
+    public synchronized Object offer(UUID actor,HandoverService.Offer request){if(!characters.get(actor).npc()&&!onlineUsers().contains(actor))throw AccountService.bad("请先连接游戏世界");tx.executeWithoutResult(s->handovers.prune(onlineUsers()));var id=tx.execute(s->{var result=handovers.propose(actor,request,System.currentTimeMillis());var accepted=handovers.npcAcceptance(result);if(accepted!=null){handovers.accept(request.recipient(),accepted,System.currentTimeMillis());if(battles.engaged(actor))battles.payHandover(actor,onlineUsers(),System.currentTimeMillis());}return result;});battleRevision++;broadcast();return Map.of("id",id);}
+    public synchronized Object acceptHandover(UUID actor,HandoverService.Accept request){tx.executeWithoutResult(s->handovers.prune(onlineUsers()));var result=tx.execute(s->{boolean old=handovers.completed(request.offerId());var out=handovers.accept(actor,request,System.currentTimeMillis());UUID sender=handovers.sender(request.offerId());if(!old&&battles.engaged(sender))battles.payHandover(sender,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);hotbar.sync(sender);return out;});battleRevision++;broadcast();return result;}
+    public synchronized void cancelHandover(UUID actor,UUID id){tx.executeWithoutResult(s->handovers.cancel(actor,id));broadcast();}
+    public synchronized Object lawStations(UUID actor){return law.stations(actor);}
+    public synchronized Object lawBoard(UUID actor,UUID station){return tx.execute(s->law.board(actor,station,System.currentTimeMillis()));}
+    public synchronized Object lawEligible(UUID actor,UUID station){return law.eligible(actor,station);}
+    public synchronized Object claimBounty(UUID actor,LawService.Claim claim){var result=tx.execute(s->law.claim(actor,claim,System.currentTimeMillis()));broadcast();return result;}
     public synchronized Object production(UUID actor){return production.view(actor);}
     public synchronized void startProduction(UUID actor,ProductionService.Start request){sceneReady(actor,world.version());if(!characters.get(actor).npc()&&!onlineUsers().contains(actor))throw AccountService.bad("请先连接游戏世界");if(routes.containsKey(actor)||sceneRoutes.containsKey(actor))throw AccountService.bad("请先停下再开始任务");tx.executeWithoutResult(s->production.start(actor,world,request,System.currentTimeMillis()));broadcast();}
     public synchronized void cancelProduction(UUID actor){tx.executeWithoutResult(s->production.cancel(actor));broadcast();}
@@ -58,6 +68,7 @@ public class WorldService {
             // Unfinished long actions are interrupted on process restart, never completed offline.
             db.update("delete from world_actions");
             production.restart();
+            db.update("update handovers set state='cancelled' where state='pending'");
             db.update("update characters set timer_kind=null,timer_end=0 where timer_kind='rest'");
             if(!previous.version().equals(world.version())){
                 db.update("update worlds set document=? where id=1",json.writeValueAsString(world));
@@ -67,6 +78,7 @@ public class WorldService {
             boolean empty=resources.nodes().isEmpty();resources.initialize(world);
             if(!empty&&!previous.version().equals(world.version()))resources.extend(previous,world);
             ferry.initialize(world,System.currentTimeMillis());characters.initialize(world,System.currentTimeMillis());
+            law.initialize(world);
             battles.recoverAfterRestart(System.currentTimeMillis());
             sceneRuntime.reconcile(world);
         });
@@ -106,7 +118,7 @@ public class WorldService {
         Set<UUID> battling=battles.actorIds();
         var profiles=characters.all();var viewing=viewer==null?null:characters.get(viewer);
         var players=profiles.stream().filter(c->!c.life().equals("dead")&&(viewing!=null&&viewing.life().equals("soul")?c.id().equals(viewer):!c.life().equals("soul"))).map(c->{
-            Map<String,Object> p=new LinkedHashMap<>();p.put("id",c.id());p.put("username",c.name());p.put("q",c.q());p.put("r",c.r());p.put("color",c.npc()?("claw".equals(c.species())?"#6c7a48":"#b0524a"):accounts.get(c.id()).color());p.put("species",c.species());p.put("online",c.npc()||online.contains(c.id()));p.put("moving",routes.containsKey(c.id()));p.put("inBattle",battling.contains(c.id()));p.put("kind",c.kind());p.put("life",c.life());p.put("hp",c.hp());p.put("maxHp",c.maxHp());return p;
+            Map<String,Object> p=new LinkedHashMap<>();p.put("id",c.id());p.put("username",law.displayName(c.id(),c.name()));p.put("q",c.q());p.put("r",c.r());p.put("color",c.npc()?("claw".equals(c.species())?"#6c7a48":"#b0524a"):accounts.get(c.id()).color());p.put("species",c.species());p.put("online",c.npc()||online.contains(c.id()));p.put("moving",routes.containsKey(c.id()));p.put("inBattle",battling.contains(c.id()));p.put("kind",c.kind());p.put("life",c.life());p.put("hp",c.hp());p.put("maxHp",c.maxHp());return p;
         }).toList();
         // Pending accounts have never entered the world and must not appear on the map.
         Set<UUID> entered=new HashSet<>(db.query("select id from accounts where entered=true",
@@ -117,7 +129,7 @@ public class WorldService {
         out.put("blockedEdges",scenes.blocked());
         var local=viewer==null?null:sceneRuntime.position(viewer);out.put("scenePosition",local);out.put("sceneDoors",local==null?List.of():towns.doors(local.sceneId()));out.put("sceneService",local==null?null:towns.service(viewer));
         if(local!=null&&!battling.contains(viewer))out.put("sceneLoot",loot.nearby(new LootService.Context(viewer,world.version(),viewing.q(),viewing.r(),null,null,null),System.currentTimeMillis()));
-        if(local!=null){out.put("sceneMoving",sceneRoutes.containsKey(viewer));out.put("sceneResidents",sceneRuntime.residents(local.sceneId()).stream().map(p->{var c=characters.get(p.characterId());return Map.of("id",p.characterId(),"q",p.q(),"r",p.r(),"username",c.name(),"life",c.life(),"hp",c.hp(),"maxHp",c.maxHp(),"kind",c.kind());}).toList());}
+        if(local!=null){out.put("sceneMoving",sceneRoutes.containsKey(viewer));out.put("sceneResidents",sceneRuntime.residents(local.sceneId()).stream().map(p->{var c=characters.get(p.characterId());return Map.of("id",p.characterId(),"q",p.q(),"r",p.r(),"username",law.displayName(c.id(),c.name()),"life",c.life(),"hp",c.hp(),"maxHp",c.maxHp(),"kind",c.kind());}).toList());}
         if(viewing!=null){out.put("character",viewing);out.put("inventory",resources.inventory(viewer));out.put("carriedCorpses",loot.carried(viewer));out.put("production",production.view(viewer));if(local!=null)out.put("sceneObjects",content.objects(local.sceneId(),System.currentTimeMillis()));}return out;
     }
     public synchronized AccountService.Account register(String name,String pass){return tx.execute(s->{var a=accounts.register(name,pass,world.spawn());characters.ensurePlayers();equipment.give(a.id(),"copper_coin",30);return a;});}
@@ -334,7 +346,7 @@ public class WorldService {
         boolean ferryChanged=Boolean.TRUE.equals(tx.execute(s->ferry.advance(now)));
         boolean lootChanged=Boolean.TRUE.equals(tx.execute(s->loot.expire(now)));
         if(lootChanged)battleRevision++;
-        boolean workChanged=Boolean.TRUE.equals(tx.execute(s->{boolean changed=production.advance(now);for(UUID npc:towns.respawn(now)){battles.joinResident(npc,now);changed=true;}return content.refreshStones(now)||changed;}));
+        boolean workChanged=Boolean.TRUE.equals(tx.execute(s->{boolean changed=production.advance(now);changed=handovers.prune(onlineUsers())||changed;changed=law.advance(now)||changed;var revived=new ArrayList<>(towns.respawn(now));revived.addAll(law.respawn(now));for(UUID npc:revived){battles.joinResident(npc,now);changed=true;}return content.refreshStones(now)||changed;}));
         boolean resourcesChanged=Boolean.TRUE.equals(tx.execute(s->resources.advance(world,now)))||lootChanged||workChanged;
         boolean battlesChanged=Boolean.TRUE.equals(tx.execute(s->battles.advance(onlineUsers(),now)));
         if(battlesChanged){battleRevision++;for(var c:characters.all())if(!c.alive()){if(!c.life().equals("soul"))routes.remove(c.id());resources.cancel(c.id());}}

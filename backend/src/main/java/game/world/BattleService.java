@@ -8,6 +8,8 @@ import java.util.*;
 /** Server-owned tactical encounters. WorldService serializes commands and commits them before broadcasting. */
 @Service
 public class BattleService {
+    @org.springframework.beans.factory.annotation.Autowired private LawService law;
+    public void payHandover(UUID actor,Set<UUID> online,long now){var b=requireTurn(actor);requireStanding(actor);if(b.points()<1)throw bad("交接需要1行动点");if(Boolean.TRUE.equals(db.queryForObject("select sprinted from battle_actors where encounter_id=? and account_id=?",Boolean.class,b.id(),actor)))throw bad("快跑后不能交出物品");db.update("update battle_actors set handed_over=true where encounter_id=? and account_id=?",b.id(),actor);db.update("update battle_encounters set turn_points=turn_points-1 where id=?",b.id());event(b.id(),"handover",actor,null,null,null,now);if(b.points()==1)advanceTurn(b,position(b.id(),actor).initiative(),online,now);}
     @org.springframework.beans.factory.annotation.Autowired private ProductionService production;
     public static final int RADIUS=6;
     private static final int TURN_POINTS=6;
@@ -149,7 +151,7 @@ public class BattleService {
         Encounter b=forActor(viewer);
         if(b==null)return Map.of("active",false);
         List<Actor> actors=db.query("select a.account_id,c.username,c.color,a.q,a.r,a.initiative,a.entry_round,a.withdraw_direction,a.initiative_roll,a.initiative_score,a.reaction_points,a.shield_raised from battle_actors a left join accounts c on c.id=a.account_id where a.encounter_id=? order by a.initiative",
-            (rs,n)->{UUID id=rs.getObject(1,UUID.class);var c=characters.get(id);var l=characters.loadout(id);return new Actor(id,c.name(),Objects.requireNonNullElse(rs.getString(3),"#9aa69b"),rs.getInt(4),rs.getInt(5),rs.getInt(6),rs.getInt(7),(online.contains(id)||c.npc()),(Integer)rs.getObject(8),c,l.weapon(),l,rs.getInt(9),rs.getInt(10),rs.getInt("reaction_points"),rs.getBoolean("shield_raised"),id.equals(viewer)?actions(c,l):List.of());},b.id());
+            (rs,n)->{UUID id=rs.getObject(1,UUID.class);var c=characters.get(id);var l=characters.loadout(id);return new Actor(id,law.displayName(id,c.name()),Objects.requireNonNullElse(rs.getString(3),"#9aa69b"),rs.getInt(4),rs.getInt(5),rs.getInt(6),rs.getInt(7),(online.contains(id)||c.npc()),(Integer)rs.getObject(8),c,l.weapon(),l,rs.getInt(9),rs.getInt(10),rs.getInt("reaction_points"),rs.getBoolean("shield_raised"),id.equals(viewer)?actions(c,l):List.of());},b.id());
         List<Intent> intents=intents(b.id()).stream().filter(i->i.visibility().equals("public")||i.attackerId().equals(viewer)).toList();
         List<Event> events=events(b.id(),32);
         Map<String,Object> out=new LinkedHashMap<>();
@@ -340,7 +342,7 @@ public class BattleService {
             switch(d.effect()){
                 case "cure_self" -> {equipment.consume(actor,d.item(),1);statuses.remove(actor,"poison");event(b.id(),"status-cured",actor,actor,to.q(),to.r(),now);}
                 case "heal_self" -> {var c=characters.get(actor);int healed=Math.min(d.damage(),c.maxHp()-c.hp());equipment.consume(actor,d.item(),1);characters.heal(actor,d.damage());event(b.id(),"potion",actor,actor,to.q(),to.r(),now,healed,null);}
-                case "interrupt_intent" -> {cancelIntent(b.id(),target,"interrupted",now);characters.hostile(actor);event(b.id(),"interrupt",actor,target,to.q(),to.r(),now);}
+                case "interrupt_intent" -> {cancelIntent(b.id(),target,"interrupted",now);law.hostile(actor,target,"非法敌对打断",now);characters.hostile(actor);event(b.id(),"interrupt",actor,target,to.q(),to.r(),now);}
                 case "projectile","aimed_projectile" -> {
                     equipment.consume(actor,d.item(),1);
                     if(d.effect().equals("aimed_projectile"))db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
@@ -405,6 +407,7 @@ public class BattleService {
         Intent previous=intents(b.id()).stream().filter(i->i.attackerId().equals(actor)).findFirst().orElse(null);
         if(previous!=null&&previous.q()==q&&previous.r()==r)return;
         if(b.points()<weapon.cost())throw bad("本回合战术点不足");
+        for(var p:positions(b.id()))if(!p.id().equals(actor)&&cells.contains(new WorldMap.Hex(p.q(),p.r())))law.hostile(actor,p.id(),"非法预设攻击",now);
         characters.hostile(actor);
         if(previous!=null){
             db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);
@@ -431,6 +434,7 @@ public class BattleService {
         if(b.points()==2)advanceTurn(b,position(b.id(),actor).initiative(),online,now);
     }
     private void advanceTurn(Encounter b,int after,Set<UUID> online,long now){
+        db.update("update handovers set state='cancelled' where state='pending' and battle_id=?",b.id());
         recovery.forget(b.id());
         if(db.update("delete from battle_intents where encounter_id=? and attacker_id=? and intent_kind='aim' and ready=true",b.id(),b.turn())>0)event(b.id(),"aim-expired",b.turn(),null,null,null,now);
         List<Position> all=positions(b.id());
@@ -443,6 +447,7 @@ public class BattleService {
         db.update("update battle_encounters set round_number=?,turn_account_id=?,turn_points=?,attack_used=false,turn_deadline=?,turn_start_edge=? where id=?",
             round,next.id(),characters.get(next.id()).alive()?TURN_POINTS:0,now+turnMillis,exit(b,next.q(),next.r()),b.id());
         db.update("update battle_actors set reaction_points=0,shield_raised=false where encounter_id=? and account_id=?",b.id(),next.id());
+        db.update("update battle_actors set handed_over=false,sprinted=false where encounter_id=? and account_id=?",b.id(),next.id());
         event(b.id(),"turn",next.id(),null,null,null,now);
         if(tickStatuses(b.id(),next.id(),now)){
             if(!finishIfNeeded(b.id(),now))advanceTurn(byId(b.id()),next.initiative(),online,now);
@@ -488,6 +493,7 @@ public class BattleService {
     }
     private int hit(UUID battle,UUID attacker,UUID target,int q,int r,int damage,long now){return hit(battle,attacker,target,q,r,damage,now,false);}
     private int hit(UUID battle,UUID attacker,UUID target,int q,int r,int damage,long now,boolean weaponAttack){
+        law.hostile(attacker,target,"非法攻击",now);
         var defense=characters.loadout(target);
         int piercing=weaponAttack?db.queryForObject("select coalesce((select armor_piercing from item_definitions where code=?),0)",Integer.class,characters.weapon(attacker).code()):0;
         int afterArmor=Math.max(1,damage-Math.max(0,defense.armor()-piercing));
@@ -542,6 +548,7 @@ public class BattleService {
         var targetProfile=characters.get(target);if(!targetProfile.alive())throw bad("只能治疗站立存活角色");
         if(targetProfile.hp()>=targetProfile.maxHp())throw bad("目标已满血");
         equipment.consume(actor,"bandage",1);
+        law.aid(actor,target,now);
         characters.heal(target,4);
         db.update("update battle_encounters set turn_points=turn_points-2 where id=?",b.id());
         event(b.id(),"bandage",actor,target,t.q(),t.r(),now,Math.min(4,targetProfile.maxHp()-targetProfile.hp()),null);detailLast(b.id(),Map.of("actionPoints",2,"item","bandage","quantity",1));

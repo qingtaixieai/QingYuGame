@@ -12,6 +12,15 @@ public class GameController {
     private final AccountService accounts;private final WorldService world;private final ModerationService moderation;
     GameController(AccountService accounts,WorldService world,ModerationService moderation){this.moderation=moderation;this.accounts=accounts;this.world=world;}
     record EmoteRequest(String code,String version) {}
+    record HandoverCancel(UUID offerId) {}
+    @GetMapping("/handover") public Object handovers(HttpServletRequest req){return world.handovers(accounts.require(req,true,false).id());}
+    @PostMapping("/handover/offer") public Object offer(@RequestBody HandoverService.Offer b,HttpServletRequest req){return world.offer(accounts.require(req,true,false).id(),b);}
+    @PostMapping("/handover/accept") public Object accept(@RequestBody HandoverService.Accept b,HttpServletRequest req){return world.acceptHandover(accounts.require(req,true,false).id(),b);}
+    @PostMapping("/handover/cancel") public Object cancel(@RequestBody HandoverCancel b,HttpServletRequest req){world.cancelHandover(accounts.require(req,true,false).id(),b.offerId());return Map.of("message","已取消交接");}
+    @GetMapping("/law/stations") public Object stations(HttpServletRequest req){return world.lawStations(accounts.require(req,true,false).id());}
+    @GetMapping("/law/{id}/board") public Object board(@PathVariable UUID id,HttpServletRequest req){return world.lawBoard(accounts.require(req,true,false).id(),id);}
+    @GetMapping("/law/{id}/corpses") public Object corpses(@PathVariable UUID id,HttpServletRequest req){return world.lawEligible(accounts.require(req,true,false).id(),id);}
+    @PostMapping("/law/claim") public Object claim(@RequestBody LawService.Claim b,HttpServletRequest req){return world.claimBounty(accounts.require(req,true,false).id(),b);}
     record Credentials(String username,String password) {}
     public record DoorRequest(UUID doorId,String version) {}
     @PostMapping("/scene/door") public Object door(@RequestBody DoorRequest body,HttpServletRequest req){world.useDoor(accounts.require(req,true,false).id(),body.doorId(),body.version());return Map.of("message","已通过门");}

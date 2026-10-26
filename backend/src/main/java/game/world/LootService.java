@@ -15,6 +15,7 @@ public class LootService {
     public record ItemDrop(String code,Integer quantity) {}
     public record Command(String action,UUID containerId,String code,Integer quantity,String version,UUID battleId,List<ItemDrop> items) {}
     private final JdbcTemplate db;
+    @org.springframework.beans.factory.annotation.Autowired private LawService law;
     LootService(JdbcTemplate db){this.db=db;}
     private List<Container> query(String where,Object...args){
         return db.query("select c.*,(select coalesce(sum(quantity),0) from loot_items where container_id=c.id) as item_count from loot_containers c "+where,
@@ -27,6 +28,7 @@ public class LootService {
     public static boolean sameCell(Container x,Context c){return Objects.equals(x.carrierId(),c.actor())||x.carrierId()==null&&x.version().equals(c.version())&&x.q()==c.q()&&x.r()==c.r()&&Objects.equals(x.battleId(),c.battleId())&&(c.battleId()==null||Objects.equals(x.battleQ(),c.battleQ())&&Objects.equals(x.battleR(),c.battleR()));}
     private Container require(UUID id,Context c,long now){
         if(id==null)throw AccountService.bad("请选择尸体或小袋子");
+        if(db.queryForObject("select exists(select 1 from handover_corpses where corpse_id=?)",Boolean.class,id))throw AccountService.bad("尸体已预留给当面交接，请先取消交接");
         var x=query("where id=? for update",id).stream().findFirst().orElseThrow(()->AccountService.bad("此处遗留物已被拿走或消失"));
         if(x.expiresAt()!=null&&x.expiresAt()<=now)throw AccountService.bad("此处遗留物已到期消失");
         if(!sameCell(x,c))throw AccountService.bad("必须站在同一格才能查看和拿取");
@@ -36,14 +38,17 @@ public class LootService {
     public List<Map<String,Object>> contents(UUID id,Context c,long now){require(id,c,now);return db.queryForList("select d.*,i.quantity from loot_items i join item_definitions d on d.code=i.item_code where i.container_id=? order by d.code",id);}
     public void createCorpse(CharacterService.Character c,String version,long now){
         db.update("delete from production_tasks where actor_id=?",c.id());
-        // Player source schema is reserved, but player death deliberately produces no corpse or drops.
-        if(!c.npc())return;
+        db.update("update handovers set state='cancelled' where state='pending' and (sender=? or recipient=?)",c.id(),c.id());
         UUID id=UUID.randomUUID();
         db.update("insert into loot_containers(id,kind,name,source_kind,source_id,world_version,q,r,created_at,expires_at,strength,agility,constitution,intellect,perception,willpower) values(?,'corpse',?,'monster',?,?,?,?,?,?,?,?,?,?,?,?)",id,c.name()+"的尸体",c.id(),version,c.q(),c.r(),now,now+GROUND_LIFETIME,c.strength(),c.agility(),c.constitution(),c.intellect(),c.perception(),c.willpower());
         db.update("update loot_containers set source_species=? where id=?",c.species(),id);
         db.update("update loot_containers set skinnable=exists(select 1 from creature_harvest where species=?) where id=?",c.species(),id);
         db.update("update loot_containers c set battle_id=a.encounter_id,battle_q=a.q,battle_r=a.r from battle_actors a join battle_encounters b on b.id=a.encounter_id where c.id=? and a.account_id=? and b.active=true",id,c.id());
         markScene(id,c.id());
+        if(!c.npc())db.update("update loot_containers set source_kind='player' where id=?",id);
+        law.snapshot(id,c.id(),now);
+        // Players keep their inventory/equipment; their unique corpse carries legal entitlement only.
+        if(!c.npc())return;
         // 生物背包物品随尸体掉落；装备的武器也一并进入尸体供玩家拾取。
         for(var row:db.queryForList("select item_code,quantity from inventories where character_id=? and quantity>0",c.id()))
             db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,?) on conflict(container_id,item_code) do update set quantity=loot_items.quantity+excluded.quantity",id,row.get("item_code"),row.get("quantity"));

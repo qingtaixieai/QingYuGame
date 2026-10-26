@@ -99,7 +99,9 @@ class PhaseOneIntegrationTest {
             long now=System.currentTimeMillis();
             var tx=new TransactionTemplate(manager);
             UUID battle=tx.execute(s->battles.start(a.id(),b.id(),world.map().version(),world.map(),now));
-            db.update("update battle_encounters set turn_points=2,turn_deadline=1 where id=?",battle);
+            // This assertion covers player reconnect grace, not autonomous NPC turns.
+            // Initiative is random and nearby town residents can join this scene.
+            db.update("update battle_encounters set turn_account_id=?,turn_points=2,turn_deadline=1 where id=?",a.id(),battle);
             var before=db.queryForMap("select * from battle_encounters where id=?",battle);
             var actors=db.queryForList("select * from battle_actors where encounter_id=? order by account_id",battle);
             var events=db.queryForList("select * from battle_events where encounter_id=? order by id",battle);

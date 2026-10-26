@@ -42,6 +42,7 @@ public class ShopService {
         for(var line:order.lines()){
             if(line==null||line.quantity()<1||line.quantity()>10000)throw AccountService.bad("数量须为1至10000");
             if(line.corpseId()!=null){
+                if(db.queryForObject("select exists(select 1 from handover_corpses where corpse_id=?)",Boolean.class,line.corpseId()))throw AccountService.bad("尸体已预留给交接，请先取消");
                 if(buy||line.quantity()!=1||!seen.add("corpse:"+line.corpseId()))throw AccountService.bad("尸体必须独立出售");
                 if(db.queryForObject("select exists(select 1 from production_tasks where corpse_id=?)",Boolean.class,line.corpseId()))throw AccountService.bad("尸体正在剥皮，请先取消");
                 var c=corpses(actor).stream().filter(x->line.corpseId().equals(x.get("id"))).findFirst().orElseThrow(()->AccountService.bad("尸体不在背包中"));

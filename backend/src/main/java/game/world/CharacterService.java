@@ -98,7 +98,7 @@ public class CharacterService {
         db.update("delete from character_statuses where character_id=?",id);
         db.update("update characters set life=?,hp=0,down_hp=0,death_q=?,death_r=?,timer_kind=?,timer_end=?,protected_until=0,saved_at=? where id=?",c.npc()?"dead":"soul",c.q,c.r,c.npc()?"respawn":null,c.npc()?now+(c.kind().equals("service")?300000:respawnMs):0,now,id);
         db.update("delete from world_actions where account_id=?",id);db.update("delete from ferry_passengers where account_id=?",id);
-        if(!c.npc())relocate(id,c.bindQ,c.bindR);
+        // Death does not leave the jurisdiction; recall is a separate timed action.
     }
     public void rescue(UUID id){var c=get(id);if(!c.life.equals("down"))throw AccountService.bad("目标没有倒地");db.update("update characters set life='alive',hp=least(max_hp,5) where id=?",id);}
     public void bind(UUID id){requireAlive(id);var c=get(id);var tile=world.index().get(c.hex());if(tile==null||tile.place()==null||!tile.place().type().equals("town"))throw AccountService.bad("请先到达城镇");db.update("update characters set bind_q=?,bind_r=? where id=?",c.q,c.r,id);}
