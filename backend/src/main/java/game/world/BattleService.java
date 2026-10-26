@@ -15,10 +15,11 @@ public class BattleService {
     private static final String[] NAMES={"东","东南","西南","西","西北","东北"};
     private WorldMap world;
     @org.springframework.beans.factory.annotation.Autowired private SceneRuntime sceneRuntime;
+    @org.springframework.beans.factory.annotation.Autowired private TownService towns;
     private UUID sceneId(Encounter b){return b.scene()==null?null:b.scene().id();}
     private SceneMap scene(Encounter b){return b.scene();}
     private int radius(Encounter b){var scene=scene(b);return scene==null?RADIUS:scene.radius();}
-    private List<Integer> sides(Encounter b,int q,int r){return SceneRuntime.sides(new WorldMap.Hex(q,r),radius(b));}
+    private List<Integer> sides(Encounter b,int q,int r){var h=new WorldMap.Hex(q,r);var result=new ArrayList<Integer>();if(b.scene()==null||b.scene().level()==2)result.addAll(SceneRuntime.sides(h,radius(b)));var doors=towns.doors(sceneId(b));for(int i=0;i<doors.size();i++)if(doors.get(i).open()&&doors.get(i).cell().equals(h))result.add(6+i);return result;}
     private boolean within(Encounter b,int q,int r){return distance(0,0,q,r)<=radius(b);}
     private boolean exit(Encounter b,int q,int r){return !sides(b,q,r).isEmpty();}
     private Set<WorldMap.Hex> terrainBlocked(Encounter b){var s=scene(b);if(s==null)return Set.of();var legal=new HashSet<>(s.cells().stream().filter(SceneMap.Cell::walkable).map(SceneMap.Cell::hex).toList());var out=new HashSet<WorldMap.Hex>();for(int q=-s.radius();q<=s.radius();q++)for(int r=-s.radius();r<=s.radius();r++){var h=new WorldMap.Hex(q,r);if(!legal.contains(h))out.add(h);}return out;}
@@ -33,13 +34,16 @@ public class BattleService {
         for(int i=0;i<6;i++)if(values[i]==RADIUS)out.add(i);
         return out;
     }
-    public record Edge(int direction,String name,int q,int r,boolean walkable,UUID battleId,String destination) {}
+    public record Edge(int direction,String name,int q,int r,boolean walkable,UUID battleId,String destination,WorldMap.Hex cell) {}
     private List<Edge> edges(Encounter b){
         var index=world.index();List<Edge> result=new ArrayList<>();
         for(int i=0;i<6;i++){var d=DIRECTIONS.get(i);int q=b.q()+d.q(),r=b.r()+d.r();var tile=index.get(new WorldMap.Hex(q,r));var other=at(b.version(),q,r);
-            result.add(new Edge(i,NAMES[i],q,r,tile!=null&&tile.walkable()&&passageOpen.test(new WorldMap.Hex(b.q(),b.r()),new WorldMap.Hex(q,r)),other==null?null:other.id(),tile==null?"世界边界":tile.place()!=null?tile.place().name():switch(tile.terrain()){case "forest"->"森林";case "mountain"->"高山";case "river"->"河流";case "ocean"->"海洋";default->"原野";}));}
+            result.add(new Edge(i,NAMES[i],q,r,(b.scene()==null||b.scene().level()==2)&&tile!=null&&tile.walkable()&&passageOpen.test(new WorldMap.Hex(b.q(),b.r()),new WorldMap.Hex(q,r)),other==null?null:other.id(),tile==null?"世界边界":tile.place()!=null?tile.place().name():switch(tile.terrain()){case "forest"->"森林";case "mountain"->"高山";case "river"->"河流";case "ocean"->"海洋";default->"原野";},null));}
+        var doors=towns.doors(sceneId(b));for(int i=0;i<doors.size();i++){var d=doors.get(i);var dest=sceneRuntime.map(d.destinationScene());var other=atScene(dest.id());result.add(new Edge(6+i,"门",dest.owner().q(),dest.owner().r(),d.open(),other==null?null:other.id(),d.name(),d.cell()));}
         return result;
     }
+    private Encounter atScene(UUID id){return encounters("and scene_id=?",id).stream().findFirst().orElse(null);}
+    public void joinResident(UUID actor,long now){var p=sceneRuntime.position(actor);if(p==null||engaged(actor))return;var b=atScene(p.sceneId());if(b!=null){characters.requireAlive(actor);if(sceneRuntime.occupied(p.sceneId(),actor).contains(p.hex())||b.scene().cells().stream().noneMatch(c->c.hex().equals(p.hex())&&c.walkable()))throw bad("战场入口已满或不可通行");enterAt(actor,b,p.hex(),now);}}
     public boolean blocked(int q,int r){return at(world.version(),q,r)!=null;}
     /** 与 (q,r) 相邻的进行中战斗 id（用于生物增援），没有则 null。 */
     public UUID adjacentEncounter(int q,int r){for(var d:DIRECTIONS){var target=new WorldMap.Hex(q+d.q(),r+d.r());if(!passageOpen.test(new WorldMap.Hex(q,r),target))continue;var e=at(world.version(),target.q(),target.r());if(e!=null)return e.id();}return null;}
@@ -80,7 +84,7 @@ public class BattleService {
         return db.query("select id,world_version,world_q,world_r,round_number,turn_account_id,turn_points,attack_used,turn_deadline,next_initiative,turn_start_edge,(select document from scene_documents where id=battle_encounters.scene_id) from battle_encounters where active=true "+where,
             (rs,n)->new Encounter(rs.getObject(1,UUID.class),rs.getString(2),rs.getInt(3),rs.getInt(4),rs.getInt(5),rs.getObject(6,UUID.class),rs.getInt(7),rs.getBoolean(8),rs.getLong(9),rs.getInt(10),rs.getBoolean(11),rs.getString(12)==null?null:json.readValue(rs.getString(12),SceneMap.class)),args);
     }
-    private Encounter at(String version,int q,int r){return encounters("and world_version=? and world_q=? and world_r=?",version,q,r).stream().findFirst().orElse(null);}
+    private Encounter at(String version,int q,int r){return encounters("and world_version=? and world_q=? and world_r=? and (scene_id is null or scene_id in (select id from scene_documents where (document::jsonb->>'level')::int=2))",version,q,r).stream().findFirst().orElse(null);}
     private Encounter forActor(UUID id){return encounters("and id in (select encounter_id from battle_actors where account_id=?)",id).stream().findFirst().orElse(null);}
     private Encounter byId(UUID id){return encounters("and id=?",id).stream().findFirst().orElse(null);}
     private List<Position> positions(UUID id){
@@ -138,7 +142,7 @@ public class BattleService {
     public Set<UUID> actorIds(){return new HashSet<>(db.query("select a.account_id from battle_actors a join battle_encounters b on b.id=a.encounter_id where b.active=true",
         (rs,n)->rs.getObject(1,UUID.class)));}
     public List<Summary> summaries(String version){
-        return db.query("select b.id,b.world_q,b.world_r,count(a.account_id) from battle_encounters b join battle_actors a on a.encounter_id=b.id where b.active=true and b.world_version=? group by b.id,b.world_q,b.world_r",
+        return db.query("select b.id,b.world_q,b.world_r,count(a.account_id) from battle_encounters b join battle_actors a on a.encounter_id=b.id where b.active=true and b.world_version=? and (b.scene_id is null or b.scene_id in (select id from scene_documents where (document::jsonb->>'level')::int=2)) group by b.id,b.world_q,b.world_r",
             (rs,n)->new Summary(rs.getObject(1,UUID.class),rs.getInt(2),rs.getInt(3),rs.getInt(4)),version);
     }
     public Object current(UUID viewer,Set<UUID> online){
@@ -150,7 +154,7 @@ public class BattleService {
         List<Event> events=events(b.id(),32);
         Map<String,Object> out=new LinkedHashMap<>();
         out.put("active",true);out.put("id",b.id());out.put("worldQ",b.q());out.put("worldR",b.r());out.put("radius",radius(b));
-        var scene=scene(b);if(scene!=null){out.put("sceneId",scene.id());out.put("cells",scene.cells());}
+        var scene=scene(b);if(scene!=null){out.put("sceneId",scene.id());out.put("sceneLevel",scene.level());out.put("cells",scene.cells());}
         out.put("round",b.round());out.put("turnAccountId",b.turn());out.put("turnPoints",b.points());out.put("turnDeadline",b.deadline());
         out.put("attackUsed",b.attackUsed());out.put("actors",actors);out.put("intents",intents);out.put("events",events);out.put("edges",edges(b));out.put("turnStartEdge",b.turnStartEdge());
         out.put("actionOptions",actionOptions(viewer));
@@ -172,14 +176,14 @@ public class BattleService {
         var a=characters.get(actor);var t=characters.get(target);
         characters.requireAlive(actor);
         if((!t.alive()&&!t.life().equals("down"))||t.protectedUntil()>now)throw bad("目标当前不能参战");
-        if(a.q()!=t.q()||a.r()!=t.r())throw bad("只能向同一世界格的角色发起战斗");
         var ap=sceneRuntime.position(actor);var tp=sceneRuntime.position(target);
+        if(ap==null&&(a.q()!=t.q()||a.r()!=t.r()))throw bad("只能向同一世界格的角色发起战斗");
         if((ap==null)!=(tp==null)||ap!=null&&!ap.sceneId().equals(tp.sceneId()))throw bad("目标不在同一实际场景");
         for(var c:List.of(a,t))if(!c.npc()&&(!accounts.get(c.id()).approved()||db.queryForObject("select count(*) from accounts where id=? and entered=true",Integer.class,c.id())==0))throw bad("角色尚未进入世界");
         if(forActor(actor)!=null||forActor(target)!=null)throw bad("角色已经在战斗中");
-        if(at(version,a.q(),a.r())!=null)throw bad("此格已有战斗，请选择加入");
         UUID id=UUID.randomUUID();
         var actualScene=ap==null?sceneRuntime.outdoor(world,a.hex()):sceneRuntime.map(ap.sceneId());
+        if(atScene(actualScene.id())!=null)throw bad("此场景已有战斗，请选择加入");
         if(ap==null){var occupied=sceneRuntime.occupied(actualScene.id(),actor);var starts=new ArrayList<>(actualScene.cells().stream().filter(SceneMap.Cell::walkable).map(SceneMap.Cell::hex).filter(h->SceneRuntime.sides(h,actualScene.radius()).isEmpty()&&!occupied.contains(h)).toList());if(starts.size()<2)throw bad("场景内部没有足够合法空位");Collections.shuffle(starts);sceneRuntime.put(actor,actualScene.id(),starts.get(0));sceneRuntime.put(target,actualScene.id(),starts.get(1));}
         db.update("insert into battle_encounters(id,world_version,world_q,world_r,turn_account_id,turn_deadline,scene_id) values(?,?,?,?,?,?,?)",id,version,a.q(),a.r(),actor,now+turnMillis,actualScene.id());
         Set<UUID> entered=new HashSet<>(db.query("select id from accounts where approved=true and entered=true",(rs,n)->rs.getObject(1,UUID.class)));
@@ -191,7 +195,7 @@ public class BattleService {
         for(int i=0;i<participants.size();i++){UUID user=participants.get(i);if(engaged(user))throw bad("同格角色已在其他战斗中");var cell=sceneRuntime.position(user).hex();
             db.update("insert into battle_actors(encounter_id,account_id,q,r,initiative,entry_round) values(?,?,?,?,?,1)",id,user,cell.q(),cell.r(),i);}
         for(UUID user:participants){production.cancel(user);characters.cancelTimer(user);db.update("update battle_actors set initiative_roll=?,initiative_score=? where encounter_id=? and account_id=?",rolls.get(user),rolls.get(user)+Math.floorDiv(characters.get(user).agility()-10,2),id,user);}
-        db.update("update battle_encounters set next_initiative=?,turn_account_id=? where id=?",participants.size(),participants.getFirst(),id);
+        var firstPosition=sceneRuntime.position(participants.getFirst());db.update("update battle_encounters set next_initiative=?,turn_account_id=?,turn_start_edge=? where id=?",participants.size(),participants.getFirst(),exit(byId(id),firstPosition.q(),firstPosition.r()),id);
         event(id,"start",actor,target,null,null,now);
         for(UUID participant:participants)db.update("insert into battle_members values(?,?) on conflict do nothing",id,participant);
         loot.enterBattle(id,version,a.q(),a.r());
@@ -203,6 +207,7 @@ public class BattleService {
         if(!world.version().equals(version))throw bad("世界已更新，请刷新地图");
         Encounter b=byId(id);
         if(b==null)throw bad("战斗已结束");
+        if(b.scene()!=null&&b.scene().level()==3)throw bad("室内战斗必须通过对应门加入");
         characters.requireAlive(actor);characters.hostile(actor);
         if(forActor(actor)!=null)throw bad("你已经在战斗中");
         var c=characters.get(actor);
@@ -227,7 +232,7 @@ public class BattleService {
         throw bad("此格战场入口已满，请稍后复活");
     }
     private static int direction(int q,int r){return DIRECTIONS.indexOf(new WorldMap.Hex(q,r));}
-    private boolean sidesForWorldCross(SceneRuntime.Position p,WorldMap.Hex destination){var s=sceneRuntime.map(p.sceneId());int d=direction(destination.q()-s.owner().q(),destination.r()-s.owner().r());return SceneRuntime.sides(p.hex(),s.radius()).contains(d);}
+    private boolean sidesForWorldCross(SceneRuntime.Position p,WorldMap.Hex destination){var s=sceneRuntime.map(p.sceneId());if(s.level()!=2)return false;int d=direction(destination.q()-s.owner().q(),destination.r()-s.owner().r());return SceneRuntime.sides(p.hex(),s.radius()).contains(d);}
     private WorldMap.Hex entryCell(Encounter b,int direction){
         Set<String> occupied=new HashSet<>();positions(b.id()).forEach(p->occupied.add(p.q()+","+p.r()));
         List<WorldMap.Hex> cells=new ArrayList<>();
@@ -238,6 +243,10 @@ public class BattleService {
     private void enter(UUID actor,Encounter b,int direction,long now){
         production.cancel(actor);
         var spawn=entryCell(b,direction);if(spawn==null)throw bad("该方向的战场入口已满，请稍后再试");
+        enterAt(actor,b,spawn,now);
+    }
+    private void enterAt(UUID actor,Encounter b,WorldMap.Hex spawn,long now){
+        production.cancel(actor);characters.cancelTimer(actor);
         var sceneId=sceneId(b);if(sceneId!=null)sceneRuntime.put(actor,sceneId,spawn);else sceneRuntime.leave(actor);
         int roll=1+new java.security.SecureRandom().nextInt(20),score=roll+Math.floorDiv(characters.get(actor).agility()-10,2);
         db.update("insert into battle_actors(encounter_id,account_id,q,r,initiative,entry_round,initiative_roll,initiative_score) values(?,?,?,?,?,?,?,?)",b.id(),actor,spawn.q(),spawn.r(),b.nextInitiative(),b.round()+1,roll,score);
@@ -552,8 +561,8 @@ public class BattleService {
     }
     public void withdraw(UUID actor,int direction,boolean force,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);requireStanding(actor);Position p=position(b.id(),actor);
-        if(direction<0||direction>5||!sides(b,p.q(),p.r()).contains(direction))throw bad("请站在对应方向的外圈格子");
-        if(!edges(b).get(direction).walkable())throw bad("该方向的大世界地形不可通行");
+        if(direction<0||direction>=edges(b).size()||!sides(b,p.q(),p.r()).contains(direction))throw bad("请站在对应方向的外圈格子");
+        if(!edges(b).get(direction).walkable())throw bad("该出口已关闭或不可通行");
         if(force){
             if(!b.turnStartEdge()||b.points()!=TURN_POINTS)throw bad("强制撤离需要回合开始已在外圈且保留完整6点");
             if(!depart(actor,b,direction,online,now))throw bad("目的地入口已满，请稍后再试");
@@ -564,6 +573,7 @@ public class BattleService {
         }
     }
     private boolean depart(UUID actor,Encounter b,int direction,Set<UUID> online,long now){
+        if(direction>=6)return departDoor(actor,b,direction,online,now);
         Edge edge=edges(b).get(direction);if(!edge.walkable())return false;
         Encounter destination=edge.battleId()==null?null:byId(edge.battleId());
         int incoming=(direction+3)%6;
@@ -580,6 +590,14 @@ public class BattleService {
         if(destination!=null)enter(actor,destination,incoming,now);
         if(!finishIfNeeded(b.id(),now))advanceTurn(b,p.initiative(),online,now);
         return true;
+    }
+    private boolean departDoor(UUID actor,Encounter b,int direction,Set<UUID> online,long now){
+        var doors=towns.doors(sceneId(b));int index=direction-6;if(index<0||index>=doors.size())return false;var door=doors.get(index);var pos=position(b.id(),actor);
+        if(!door.open()||!door.cell().equals(new WorldMap.Hex(pos.q(),pos.r())))return false;
+        var target=sceneRuntime.map(door.destinationScene());var spot=TownService.landing(target,door.destination(),sceneRuntime.occupied(target.id(),actor));if(spot==null)return false;
+        db.update("delete from battle_intents where encounter_id=? and attacker_id=?",b.id(),actor);db.update("delete from battle_actors where encounter_id=? and account_id=?",b.id(),actor);
+        sceneRuntime.put(actor,target.id(),spot);if(target.level()==2)characters.relocate(actor,target.owner().q(),target.owner().r());event(b.id(),"exit",actor,null,pos.q(),pos.r(),now);joinResident(actor,now);
+        if(!finishIfNeeded(b.id(),now))advanceTurn(b,pos.initiative(),online,now);return true;
     }
     private void close(UUID id,long now){
         var b=byId(id);if(b!=null)saveScenePositions(b);

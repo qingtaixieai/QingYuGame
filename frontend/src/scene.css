@@ -13,3 +13,5 @@
 .scene-detail{bottom:108px}
 .scene-exits{top:calc(var(--top-height,76px) + 60px)}
 @media(max-height:600px){.scene-controls{bottom:6px}.scene-detail{bottom:54px}.scene-exits{top:calc(var(--top-height,42px) + 42px)}}
+
+.scene-door-use{position:absolute;left:50%;transform:translateX(-50%);bottom:110px;z-index:6;padding:8px 14px;border:1px solid #b5a478;border-radius:6px;background:#fff2cf;color:#3d503b}@media(max-height:600px){.scene-door-use{bottom:70px;font-size:11px;padding:5px 9px}}

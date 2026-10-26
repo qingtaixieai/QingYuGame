@@ -37,12 +37,13 @@ public class WorldService {
     @org.springframework.beans.factory.annotation.Autowired private SceneService scenes;
     @org.springframework.beans.factory.annotation.Autowired private ProductionService production;
     @org.springframework.beans.factory.annotation.Autowired private SceneContentService content;
+    @org.springframework.beans.factory.annotation.Autowired private TownService towns;
     public synchronized Object production(UUID actor){return production.view(actor);}
     public synchronized void startProduction(UUID actor,ProductionService.Start request){sceneReady(actor,world.version());if(!characters.get(actor).npc()&&!onlineUsers().contains(actor))throw AccountService.bad("请先连接游戏世界");if(routes.containsKey(actor)||sceneRoutes.containsKey(actor))throw AccountService.bad("请先停下再开始任务");tx.executeWithoutResult(s->production.start(actor,world,request,System.currentTimeMillis()));broadcast();}
     public synchronized void cancelProduction(UUID actor){tx.executeWithoutResult(s->production.cancel(actor));broadcast();}
-    private void requireShop(UUID id){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中不能交易");if(routes.containsKey(id))throw AccountService.bad("请先停下");var tile=world.index().get(characters.get(id).hex());if(tile==null||tile.place()==null||!tile.place().type().equals("town"))throw AccountService.bad("请先到达城镇");}
-    public synchronized Object shop(UUID id){sceneRuntime.requireWorld(id);requireShop(id);return shops.view(id);}
-    public synchronized Object trade(UUID id,ShopService.Order order){var result=tx.execute(s->{var saved=shops.replay(id,order);if(saved!=null)return saved;sceneRuntime.requireWorld(id);requireShop(id);var out=shops.transact(id,order);hotbar.sync(id);return out;});battleRevision++;broadcast();return result;}
+    private void requireShop(UUID id){characters.requireAlive(id);ferry.requireAshore(id);if(battles.engaged(id))throw AccountService.bad("战斗中不能交易");if(routes.containsKey(id)||sceneRoutes.containsKey(id))throw AccountService.bad("请先停下");towns.requireService(id,"shop");}
+    public synchronized Object shop(UUID id){requireShop(id);return shops.view(id);}
+    public synchronized Object trade(UUID id,ShopService.Order order){var result=tx.execute(s->{var saved=shops.replay(id,order);if(saved!=null)return saved;requireShop(id);var out=shops.transact(id,order);hotbar.sync(id);return out;});battleRevision++;broadcast();return result;}
     WorldService(JdbcTemplate db,AccountService accounts,PlatformTransactionManager manager,ResourceService resources,ModerationService moderation,BattleService battles,FerryService ferry,CharacterService characters,EquipmentService equipment,HotbarService hotbar,LootService loot,SkillService skills){this.skills=skills;this.loot=loot;this.hotbar=hotbar;this.characters=characters;this.equipment=equipment;this.ferry=ferry;this.moderation=moderation;this.resources=resources;this.db=db;this.accounts=accounts;this.battles=battles;tx=new TransactionTemplate(manager);}
     @PostConstruct void load(){
         var rows=db.queryForList("select document from worlds where id=1",String.class);
@@ -78,10 +79,17 @@ public class WorldService {
         tx.executeWithoutResult(s->{var c=characters.get(actor);var existing=battles.summaries(version).stream().filter(b->b.q()==c.q()&&b.r()==c.r()).findFirst();if(existing.isPresent())battles.join(actor,existing.get().id(),version,world,System.currentTimeMillis());else{var map=sceneRuntime.outdoor(world,c.hex());sceneRuntime.enter(actor,map,false,sceneRuntime.incoming(actor,map));}production.cancel(actor);resources.cancel(actor);characters.cancelTimer(actor);});
         sceneRoutes.remove(actor);battleRevision++;broadcast();
     }
+    public synchronized void useDoor(UUID actor,UUID doorId,String version){
+        sceneReady(actor,version);if(routes.containsKey(actor)||sceneRoutes.containsKey(actor))throw AccountService.bad("请先停下再过门");
+        tx.executeWithoutResult(s->{var p=sceneRuntime.position(actor);if(p==null)throw AccountService.bad("请先进入地块");var door=towns.requireDoor(p.sceneId(),doorId,p.hex());var destination=sceneRuntime.map(door.destinationScene());
+            var cell=TownService.landing(destination,door.destination(),sceneRuntime.occupied(destination.id(),actor));if(cell==null)throw AccountService.bad("这扇门附近没有空位");
+            production.cancel(actor);resources.cancel(actor);characters.cancelTimer(actor);sceneRuntime.put(actor,destination.id(),cell);if(destination.level()==2)characters.relocate(actor,destination.owner().q(),destination.owner().r());battles.joinResident(actor,System.currentTimeMillis());
+        });sceneRoutes.remove(actor);battleRevision++;broadcast();
+    }
     public synchronized void leaveScene(UUID actor,String version){sceneReady(actor,version);tx.executeWithoutResult(s->{var p=sceneRuntime.position(actor);if(p==null)return;if(sceneRuntime.map(p.sceneId()).level()!=2)throw AccountService.bad("室内必须从门离开");sceneRuntime.leave(actor);production.cancel(actor);resources.cancel(actor);characters.cancelTimer(actor);});sceneRoutes.remove(actor);battleRevision++;broadcast();}
     public synchronized void crossScene(UUID actor,int direction,String version){
         sceneReady(actor,version);if(direction<0||direction>5)throw AccountService.bad("方向无效");
-        tx.executeWithoutResult(s->{var p=sceneRuntime.position(actor);if(p==null)throw AccountService.bad("请先进入二级地图");var map=sceneRuntime.map(p.sceneId());if(!SceneRuntime.sides(p.hex(),map.radius()).contains(direction))throw AccountService.bad("请先走到对应边缘");
+        tx.executeWithoutResult(s->{var p=sceneRuntime.position(actor);if(p==null)throw AccountService.bad("请先进入二级地图");var map=sceneRuntime.map(p.sceneId());if(map.level()!=2)throw AccountService.bad("室内必须从门离开");if(!SceneRuntime.sides(p.hex(),map.radius()).contains(direction))throw AccountService.bad("请先走到对应边缘");
             var d=BattleService.DIRECTIONS.get(direction);var to=new WorldMap.Hex(map.owner().q()+d.q(),map.owner().r()+d.r());if(!scenes.open(map.owner(),to))throw AccountService.bad("通道已封闭");
             var existing=battles.summaries(version).stream().filter(b->b.q()==to.q()&&b.r()==to.r()).findFirst();
             if(existing.isPresent())battles.join(actor,existing.get().id(),version,world,System.currentTimeMillis());else{var target=sceneRuntime.outdoor(world,to);var cell=SceneRuntime.edgeCell(target,(direction+3)%6,sceneRuntime.occupied(target.id(),actor));if(cell==null)throw AccountService.bad("对应边缘没有合法空位");sceneRuntime.put(actor,target.id(),cell);characters.relocate(actor,to.q(),to.r());}
@@ -107,7 +115,7 @@ public class WorldService {
         out.put("ferry",soul?null:ferry.state());if(soul){out.put("resources",List.of());out.put("actions",List.of());out.put("emotes",List.of());out.put("battles",List.of());}
         out.put("loot",soul?List.of():loot.ground(world.version(),System.currentTimeMillis()));
         out.put("blockedEdges",scenes.blocked());
-        var local=viewer==null?null:sceneRuntime.position(viewer);out.put("scenePosition",local);
+        var local=viewer==null?null:sceneRuntime.position(viewer);out.put("scenePosition",local);out.put("sceneDoors",local==null?List.of():towns.doors(local.sceneId()));out.put("sceneService",local==null?null:towns.service(viewer));
         if(local!=null&&!battling.contains(viewer))out.put("sceneLoot",loot.nearby(new LootService.Context(viewer,world.version(),viewing.q(),viewing.r(),null,null,null),System.currentTimeMillis()));
         if(local!=null){out.put("sceneMoving",sceneRoutes.containsKey(viewer));out.put("sceneResidents",sceneRuntime.residents(local.sceneId()).stream().map(p->{var c=characters.get(p.characterId());return Map.of("id",p.characterId(),"q",p.q(),"r",p.r(),"username",c.name(),"life",c.life(),"hp",c.hp(),"maxHp",c.maxHp(),"kind",c.kind());}).toList());}
         if(viewing!=null){out.put("character",viewing);out.put("inventory",resources.inventory(viewer));out.put("carriedCorpses",loot.carried(viewer));out.put("production",production.view(viewer));if(local!=null)out.put("sceneObjects",content.objects(local.sceneId(),System.currentTimeMillis()));}return out;
@@ -320,13 +328,13 @@ public class WorldService {
         if(lifeChanged)battleRevision++;
         boolean monstersChanged=Boolean.TRUE.equals(tx.execute(s->{sceneRuntime.reconcile(world);var excluded=battles.actorIds();excluded.addAll(sceneRuntime.activeActors());return characters.wander(now,excluded);}));
         boolean sceneChanged=Boolean.TRUE.equals(tx.execute(s->{boolean changed=false;for(var entry:new ArrayList<>(sceneRoutes.entrySet())){UUID actor=entry.getKey();var route=entry.getValue();if(battles.engaged(actor)||!characters.get(actor).alive()||route.steps().isEmpty()){sceneRoutes.remove(actor);changed=true;continue;}var next=route.steps().remove();if(!sceneRuntime.step(actor,route.sceneId(),next)||route.steps().isEmpty())sceneRoutes.remove(actor);changed=true;}
-            for(UUID actor:sceneRuntime.activeActors()){var c=characters.get(actor);if(!c.npc()||!c.alive()||production.current(actor)!=null||battles.engaged(actor)||db.queryForObject("select next_move from characters where id=?",Long.class,actor)>now)continue;var p=sceneRuntime.position(actor);var options=new ArrayList<>(p.hex().neighbors());Collections.shuffle(options);for(var next:options)if(sceneRuntime.step(actor,p.sceneId(),next)){changed=true;break;}db.update("update characters set next_move=? where id=?",now+4000,actor);}return changed;}));
+            for(UUID actor:sceneRuntime.activeActors()){var c=characters.get(actor);if(!c.npc()||c.kind().equals("service")||!c.alive()||production.current(actor)!=null||battles.engaged(actor)||db.queryForObject("select next_move from characters where id=?",Long.class,actor)>now)continue;var p=sceneRuntime.position(actor);var options=new ArrayList<>(p.hex().neighbors());Collections.shuffle(options);for(var next:options)if(sceneRuntime.step(actor,p.sceneId(),next)){changed=true;break;}db.update("update characters set next_move=? where id=?",now+4000,actor);}return changed;}));
         boolean encounterChanged=Boolean.TRUE.equals(tx.execute(s->monsterEncounters(now)));
         if(encounterChanged)battleRevision++;
         boolean ferryChanged=Boolean.TRUE.equals(tx.execute(s->ferry.advance(now)));
         boolean lootChanged=Boolean.TRUE.equals(tx.execute(s->loot.expire(now)));
         if(lootChanged)battleRevision++;
-        boolean workChanged=Boolean.TRUE.equals(tx.execute(s->{boolean changed=production.advance(now);return content.refreshStones(now)||changed;}));
+        boolean workChanged=Boolean.TRUE.equals(tx.execute(s->{boolean changed=production.advance(now);for(UUID npc:towns.respawn(now)){battles.joinResident(npc,now);changed=true;}return content.refreshStones(now)||changed;}));
         boolean resourcesChanged=Boolean.TRUE.equals(tx.execute(s->resources.advance(world,now)))||lootChanged||workChanged;
         boolean battlesChanged=Boolean.TRUE.equals(tx.execute(s->battles.advance(onlineUsers(),now)));
         if(battlesChanged){battleRevision++;for(var c:characters.all())if(!c.alive()){if(!c.life().equals("soul"))routes.remove(c.id());resources.cancel(c.id());}}
@@ -355,7 +363,7 @@ public class WorldService {
     private boolean monsterEncounters(long now){
         boolean changed=false;
         Set<UUID> entered=new HashSet<>(db.query("select id from accounts where entered=true and approved=true",(r,n)->r.getObject(1,UUID.class)));
-        for(var monster:characters.all())if(monster.npc()&&monster.alive()&&!battles.engaged(monster.id())&&!battles.blocked(monster.q(),monster.r())){
+        for(var monster:characters.all())if(monster.kind().equals("monster")&&monster.alive()&&!battles.engaged(monster.id())&&!battles.blocked(monster.q(),monster.r())){
             var target=characters.all().stream().filter(c->!c.npc()&&entered.contains(c.id())&&(c.alive()||c.life().equals("down"))&&c.protectedUntil()<=now&&c.hex().equals(monster.hex())&&!battles.engaged(c.id())&&!ferry.aboard(c.id())&&sceneRuntime.samePlace(monster.id(),c.id())).findFirst();
             if(target.isPresent()){battles.start(monster.id(),target.get().id(),world.version(),world,now);changed=true;continue;}
             if(sceneRuntime.position(monster.id())!=null)continue;
@@ -384,14 +392,15 @@ public class WorldService {
                 if(battles.engaged(id))throw AccountService.bad("请先离开战斗");
                 ferry.requireAshore(id);
                 if(routes.containsKey(id)||sceneRoutes.containsKey(id))throw AccountService.bad("请先停下");
-                if(Set.of("bind","rest").contains(action))sceneRuntime.requireWorld(id);
+                if(action.equals("bind"))sceneRuntime.requireWorld(id);
                 if(target!=null&&!sceneRuntime.samePlace(id,target))throw AccountService.bad("目标不在当前同一格");
                 switch(action){
                     case "antidote" -> {characters.requireAlive(id);if(!statuses.has(id,"poison"))throw AccountService.bad("当前没有中毒");equipment.consume(id,"antidote",1);statuses.remove(id,"poison");}
                     case "bind" -> characters.bind(id);
-                    case "rest","recall" -> {if(production.current(id)!=null)throw AccountService.bad("已有持续任务，请先取消");resources.cancel(id);characters.begin(id,action,now);}
+                    case "rest" -> {if(!characters.get(id).npc()&&!onlineUsers().contains(id))throw AccountService.bad("请先连接游戏世界");production.start(id,world,new ProductionService.Start("rest",null,null,null,null),now);}
+                    case "recall" -> {if(production.current(id)!=null)throw AccountService.bad("已有持续任务，请先取消");resources.cancel(id);characters.begin(id,action,now);}
                     case "revive" -> {characters.returnToMark(id,now);battles.rejoinAtCell(id,now);}
-                    case "cancel" -> characters.cancelTimer(id);
+                    case "cancel" -> {production.cancel(id);characters.cancelTimer(id);}
                     case "rescue" -> {characters.requireAlive(id);var a=characters.get(id);var t=characters.get(target);if(t.npc()||!a.hex().equals(t.hex())||battles.engaged(target))throw AccountService.bad("请与倒地旅人处于同一世界格");characters.rescue(target);}
                     case "potion" -> {characters.requireAlive(id);var c=characters.get(id);if(c.hp()>=c.maxHp())throw AccountService.bad("生命已满");equipment.consume(id,"healing_potion",1);characters.heal(id,6);}
                     case "bandage" -> {characters.requireAlive(id);var a=characters.get(id);UUID healTarget=target==null?id:target;var t=characters.get(healTarget);if(!a.hex().equals(t.hex()))throw AccountService.bad("战斗外绷带只能治疗同格角色");if(!t.alive())throw AccountService.bad("只能治疗站立存活角色");if(t.hp()>=t.maxHp())throw AccountService.bad("目标已满血");equipment.consume(id,"bandage",1);characters.heal(healTarget,4);}

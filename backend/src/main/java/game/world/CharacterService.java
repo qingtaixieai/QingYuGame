@@ -42,7 +42,7 @@ public class CharacterService {
     private static final org.springframework.jdbc.core.RowMapper<Character> PROFILE=(r,n)->new Character(r.getObject("id",UUID.class),r.getString("kind"),r.getString("species"),r.getString("display_name"),r.getInt("world_q"),r.getInt("world_r"),r.getInt("hp"),r.getInt("max_hp"),r.getInt("down_hp"),r.getInt("max_down_hp"),r.getString("life"),r.getInt("strength"),r.getInt("agility"),r.getInt("constitution"),r.getInt("intellect"),r.getInt("perception"),r.getInt("willpower"),r.getString("weapon"),r.getString("offhand"),r.getString("body"),r.getInt("bind_q"),r.getInt("bind_r"),(Integer)r.getObject("death_q"),(Integer)r.getObject("death_r"),r.getString("timer_kind"),r.getLong("timer_end"),r.getLong("protected_until"),r.getBoolean("deployed"));
     public List<Character> all(){return db.query(PROFILE_SQL,PROFILE);}
     public Character get(UUID id){return db.query(PROFILE_SQL+" where c.id=?",PROFILE,id).stream().findFirst().orElseThrow(()->AccountService.bad("角色不存在"));}
-    public WeaponRules.Weapon weapon(UUID id){var c=get(id);var w=equipment.loadout(id).weapon();return c.npc()&&w.code().equals("unarmed")?WeaponRules.CLAWS:w;}
+    public WeaponRules.Weapon weapon(UUID id){var c=get(id);var w=equipment.loadout(id).weapon();return c.kind().equals("monster")&&w.code().equals("unarmed")?WeaponRules.CLAWS:w;}
     /** 生物（NPC）装备与背包：出生/重生时刷新。恶霸使斧、背包各 1-4 石木；利爪怪用爪（weapon 置空走 fallback）、各 0-3 石木；绷带均 0-2。与玩家共用同一套背包。 */
     public void kit(UUID id){
         var c=get(id);
@@ -96,7 +96,7 @@ public class CharacterService {
         var c=get(id);if(c.life.equals("soul")||c.life.equals("dead"))return;
         loot.createCorpse(c,world.version(),now);
         db.update("delete from character_statuses where character_id=?",id);
-        db.update("update characters set life=?,hp=0,down_hp=0,death_q=?,death_r=?,timer_kind=?,timer_end=?,protected_until=0,saved_at=? where id=?",c.npc()?"dead":"soul",c.q,c.r,c.npc()?"respawn":null,c.npc()?now+respawnMs:0,now,id);
+        db.update("update characters set life=?,hp=0,down_hp=0,death_q=?,death_r=?,timer_kind=?,timer_end=?,protected_until=0,saved_at=? where id=?",c.npc()?"dead":"soul",c.q,c.r,c.npc()?"respawn":null,c.npc()?now+(c.kind().equals("service")?300000:respawnMs):0,now,id);
         db.update("delete from world_actions where account_id=?",id);db.update("delete from ferry_passengers where account_id=?",id);
         if(!c.npc())relocate(id,c.bindQ,c.bindR);
     }
@@ -137,7 +137,7 @@ public class CharacterService {
     private List<WorldMap.Hex> homeArea(Character c){return areaAround(new WorldMap.Hex(c.bindQ,c.bindR),1);}
     public boolean wander(long now,Set<UUID> engaged){
         boolean changed=false;
-        for(var c:all())if(c.npc()&&!engaged.contains(c.id)){var area=homeArea(c);if(area.isEmpty())continue;
+        for(var c:all())if(c.kind().equals("monster")&&!engaged.contains(c.id)){var area=homeArea(c);if(area.isEmpty())continue;
             if(c.life.equals("dead")&&c.timerEnd<=now){
                 if(c.deployed)continue; // 管理员投放的怪不重生，只留尸体
                 var occupied=new HashSet<>(all().stream().filter(x->!x.id.equals(c.id)&&!x.life.equals("soul")&&!x.life.equals("dead")).map(Character::hex).toList());var free=new ArrayList<>(area.stream().filter(h->!occupied.contains(h)).toList());if(free.isEmpty())continue;Collections.shuffle(free);var h=free.getFirst();relocate(c.id,h.q(),h.r());revive(c.id,now);kit(c.id);db.update("update characters set protected_until=0 where id=?",c.id);changed=true;}

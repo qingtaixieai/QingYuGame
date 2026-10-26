@@ -13,6 +13,8 @@ public class GameController {
     GameController(AccountService accounts,WorldService world,ModerationService moderation){this.moderation=moderation;this.accounts=accounts;this.world=world;}
     record EmoteRequest(String code,String version) {}
     record Credentials(String username,String password) {}
+    public record DoorRequest(UUID doorId,String version) {}
+    @PostMapping("/scene/door") public Object door(@RequestBody DoorRequest body,HttpServletRequest req){world.useDoor(accounts.require(req,true,false).id(),body.doorId(),body.version());return Map.of("message","已通过门");}
     @GetMapping("/production") public Object production(HttpServletRequest req){return world.production(accounts.require(req,true,false).id());}
     @PostMapping("/production/start") public Object productionStart(@RequestBody ProductionService.Start body,HttpServletRequest req){world.startProduction(accounts.require(req,true,false).id(),body);return Map.of("message","任务已开始");}
     @PostMapping("/production/cancel") public Object productionCancel(HttpServletRequest req){world.cancelProduction(accounts.require(req,true,false).id());return Map.of("message","任务已取消，未用材料已释放");}
