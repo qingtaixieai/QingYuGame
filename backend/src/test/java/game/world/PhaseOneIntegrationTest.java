@@ -191,7 +191,9 @@ class PhaseOneIntegrationTest {
             var tx=new TransactionTemplate(manager);
             assertThrows(IllegalArgumentException.class,()->tx.executeWithoutResult(s->scenes.save(local)));
             assertEquals(json.writeValueAsString(foreign),db.queryForObject("select document from scene_documents where id=?",String.class,id));
-            var a=SceneMap.outdoor(map,map.spawn(),2);var b=SceneMap.outdoor(map,map.spawn().neighbors().stream().filter(h->map.index().containsKey(h)).findFirst().orElseThrow(),2);
+            // Independent scene IDs: the live scheduler may already have materialized the town's real portals.
+            var a=new SceneMap(UUID.randomUUID(),map.version(),1,2,map.spawn(),"fixture-a",2,foreign.cells());
+            var b=new SceneMap(UUID.randomUUID(),map.version(),1,2,map.spawn().neighbors().stream().filter(h->map.index().containsKey(h)).findFirst().orElseThrow(),"fixture-b",2,foreign.cells());
             var zero=new WorldMap.Hex(0,0);
             tx.executeWithoutResult(s->{scenes.save(a);scenes.save(b);scenes.save(new ScenePortal(UUID.randomUUID(),new ScenePortal.Endpoint(a.id(),zero),new ScenePortal.Endpoint(b.id(),zero),true));});
             assertThrows(IllegalArgumentException.class,()->tx.executeWithoutResult(s->scenes.save(new SceneMap(a.id(),map.version(),1,2,a.owner(),"removed endpoint",2,List.of(new SceneMap.Cell(1,0,"grass",true))))));

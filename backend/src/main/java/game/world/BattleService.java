@@ -8,6 +8,7 @@ import java.util.*;
 /** Server-owned tactical encounters. WorldService serializes commands and commits them before broadcasting. */
 @Service
 public class BattleService {
+    @org.springframework.beans.factory.annotation.Autowired private NpcRelations npcRelations;
     @org.springframework.beans.factory.annotation.Autowired private LawService law;
     public void payHandover(UUID actor,Set<UUID> online,long now){var b=requireTurn(actor);requireStanding(actor);if(b.points()<1)throw bad("交接需要1行动点");if(Boolean.TRUE.equals(db.queryForObject("select sprinted from battle_actors where encounter_id=? and account_id=?",Boolean.class,b.id(),actor)))throw bad("快跑后不能交出物品");db.update("update battle_actors set handed_over=true where encounter_id=? and account_id=?",b.id(),actor);db.update("update battle_encounters set turn_points=turn_points-1 where id=?",b.id());event(b.id(),"handover",actor,null,null,null,now);if(b.points()==1)advanceTurn(b,position(b.id(),actor).initiative(),online,now);}
     @org.springframework.beans.factory.annotation.Autowired private ProductionService production;
@@ -652,7 +653,8 @@ public class BattleService {
     private boolean finishIfNeeded(UUID id,long now){
         if(byId(id)==null)return true;
         var all=positions(id);long standing=all.stream().filter(p->characters.get(p.id()).alive()).count();
-        if(all.size()<=1||standing==0){close(id,now);return true;}return false;
+        boolean opponents=all.stream().anyMatch(a->characters.get(a.id()).alive()&&all.stream().anyMatch(t->npcRelations.enemy(a.id(),t.id())));
+        if(all.size()<=1||standing==0||!opponents){close(id,now);return true;}return false;
     }
     public void rescue(UUID actor,UUID target,Set<UUID> online,long now){
         Encounter b=requireTurn(actor);requireStanding(actor);var a=position(b.id(),actor);var t=position(b.id(),target);
@@ -663,8 +665,9 @@ public class BattleService {
     private void actNpc(Encounter b,Set<UUID> online,long now){
         Position own=position(b.id(),b.turn());if(own==null)return;
         var from=new WorldMap.Hex(own.q(),own.r());
-        List<Position> targets=positions(b.id()).stream().filter(p->!p.id().equals(own.id())&&!characters.get(p.id()).npc()).toList();
-        if(targets.isEmpty()){close(b.id(),now);return;}
+        List<Position> targets=positions(b.id()).stream().filter(p->npcRelations.enemy(own.id(),p.id())).toList();
+        boolean holdsPost=Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from npc_tasks where actor_id=? and post_id is not null and task='idle')",Boolean.class,own.id()));
+        if(targets.isEmpty()){if(collectForNpc(b,own,online,now))return;if(!holdsPost&&npcRelations.faction(own.id())!=null)retreatNpc(b,own,online,now);else endTurn(own.id(),online,now);return;}
         var standing=targets.stream().filter(p->characters.get(p.id()).alive()).toList();if(!standing.isEmpty())targets=standing;
         var options=new ArrayList<MonsterBrain.Option>();
         Intent pending=intents(b.id()).stream().filter(i->i.attackerId().equals(own.id())).findFirst().orElse(null);
@@ -674,22 +677,12 @@ public class BattleService {
         String behavior=db.queryForObject("select behavior from characters where id=?",String.class,own.id());
         int healThreshold=behavior.equals("cautious")?9:behavior.equals("aggressive")?3:6;
         double dangerWeight=behavior.equals("cautious")?3:behavior.equals("aggressive")?0.5:2;
-        boolean lowAndOut=characters.get(own.id()).hp()<=(behavior.equals("cautious")?4:behavior.equals("aggressive")?1:2)&&!equipment.has(own.id(),"healing_potion")&&!equipment.has(own.id(),"bandage");
+        var traits=db.queryForList("select caution,duty from npc_tasks where actor_id=?",own.id());
+        double caution=traits.isEmpty()?1:((Number)traits.getFirst().get("caution")).doubleValue(),duty=traits.isEmpty()?1:((Number)traits.getFirst().get("duty")).doubleValue();
+        dangerWeight*=caution;healThreshold=(int)Math.ceil(healThreshold*caution);
+        boolean lowAndOut=characters.get(own.id()).hp()<=Math.max(1,(behavior.equals("cautious")?4:behavior.equals("aggressive")?1:2)*caution/duty)&&!equipment.has(own.id(),"healing_potion")&&!equipment.has(own.id(),"bandage");
         if(ranged&&!equipment.has(own.id(),equipment.selectedAmmo(own.id(),projectile.ammoCode()))||lowAndOut){
-            var exits=edges(b);
-            for(int direction:sides(b,own.q(),own.r()))if(exits.get(direction).walkable()){
-                withdraw(own.id(),direction,b.turnStartEdge()&&b.points()==6,online,now);return;
-            }
-            WorldMap.Hex destination=null;int best=Integer.MAX_VALUE;
-            var occupied=new HashSet<WorldMap.Hex>();positions(b.id()).stream().filter(p->!p.id().equals(own.id())).forEach(p->occupied.add(new WorldMap.Hex(p.q(),p.r())));
-            occupied.addAll(terrainBlocked(b));
-            for(int q=-radius(b);q<=radius(b);q++)for(int r=-radius(b);r<=radius(b);r++){
-                final int cq=q,cr=r;if(sides(b,q,r).stream().noneMatch(d->exits.get(d).walkable()))continue;
-                var route=BattleMovement.path(radius(b),from,new WorldMap.Hex(cq,cr),occupied);
-                if(!route.isEmpty()&&route.size()<best){best=route.size();destination=route.get(Math.min(route.size(),Math.max(1,b.points()))-1);}
-            }
-            if(destination!=null&&b.points()>0)step(own.id(),destination.q(),destination.r(),online,now);else endTurn(own.id(),online,now);
-            return;
+            retreatNpc(b,own,online,now);return;
         }
         for(var available:actionOptions(own.id()))if(available.disabledReason()==null){
             var definition=available.definition();
@@ -714,6 +707,7 @@ public class BattleService {
                 var aim=new WorldMap.Hex(q,r);
                 var cells=WeaponRules.battlefieldCells(weapon,from,aim,radius(b));
                 if(cells.isEmpty())continue;
+                if(positions(b.id()).stream().anyMatch(p->!p.id().equals(own.id())&&!npcRelations.enemy(own.id(),p.id())&&cells.contains(new WorldMap.Hex(p.q(),p.r()))))continue;
                 double score=0;
                 for(var t:targets){var h=new WorldMap.Hex(t.q(),t.r());
                     if(cells.contains(h)&&(pending==null||!pending.cells().contains(h)))score+=8+(characters.get(t.id()).hp()<=3?4:0);
@@ -722,12 +716,16 @@ public class BattleService {
             }
         }
         if(b.points()>=2){var self=characters.get(own.id());if(self.hp()<self.maxHp()&&equipment.has(own.id(),"bandage"))options.add(new MonsterBrain.Option("heal",from,self.hp()<=healThreshold?14:behavior.equals("aggressive")?0:6));}
-        if(b.points()>0)for(var next:from.neighbors())if(within(b,next.q(),next.r())&&!terrainBlocked(b).contains(next)&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
-            double score=0;int nearest=targets.stream().mapToInt(p->distance(next.q(),next.r(),p.q(),p.r())).min().orElse(20),before=targets.stream().mapToInt(p->distance(from.q(),from.r(),p.q(),p.r())).min().orElse(20);
+        var distances=npcDistances(b,own,targets);
+        if(!holdsPost&&b.points()>0)for(var next:from.neighbors())if(within(b,next.q(),next.r())&&!terrainBlocked(b).contains(next)&&positions(b.id()).stream().noneMatch(p->p.q()==next.q()&&p.r()==next.r())){
+            if(!distances.containsKey(next))continue;
+            double score=0;int nearest=distances.get(next),before=distances.getOrDefault(from,1000);
             score+=(ranged?(Math.abs(before-(behavior.equals("cautious")?4:3))-Math.abs(nearest-(behavior.equals("cautious")?4:3))):(before-nearest))*2-0.4;
             if(pending!=null&&pending.kind().equals("aim"))score-=12;
             if(pending!=null&&pending.kind().equals("melee")&&!retains(pending,next)&&targets.stream().anyMatch(t->pending.cells().contains(new WorldMap.Hex(t.q(),t.r()))))score+=10;
-            for(var i:intents(b.id()))if(i.kind().equals("melee")&&!i.attackerId().equals(own.id())&&i.cells().contains(from))score-=i.damage()*dangerWeight;
+            // Already marked: staying also takes this pending hit. Penalize newly entered
+            // threats, rather than making every escape/reposition score negative forever.
+            for(var i:intents(b.id()))if(i.kind().equals("melee")&&!i.attackerId().equals(own.id())&&!i.cells().contains(from)&&i.cells().contains(next))score-=i.damage()*dangerWeight;
             if(b.points()<=2&&pending==null&&nearest>1)score-=1;
             options.add(new MonsterBrain.Option("move",next,score));
         }
@@ -737,6 +735,54 @@ public class BattleService {
         else if(choice.action().equals("attack"))attackCell(own.id(),choice.cell().q(),choice.cell().r(),online,now);
         else if(choice.action().equals("heal"))bandage(own.id(),own.id(),online,now);
         else step(own.id(),choice.cell().q(),choice.cell().r(),online,now);
+    }
+    private Map<WorldMap.Hex,Integer> npcDistances(Encounter b,Position own,List<Position> targets){
+        var blocked=new HashSet<>(terrainBlocked(b));positions(b.id()).stream().filter(p->!p.id().equals(own.id())).forEach(p->blocked.add(new WorldMap.Hex(p.q(),p.r())));
+        var result=new HashMap<WorldMap.Hex,Integer>();var queue=new ArrayDeque<WorldMap.Hex>();
+        var weapon=characters.weapon(own.id());
+        if(equipment.projectile(weapon.code())!=null){
+            for(var t:targets){var h=new WorldMap.Hex(t.q(),t.r());result.put(h,0);queue.add(h);}
+        }else{
+            // Approach a legal attack stance, not the occupied target tile. A spear may need to
+            // sidestep at an edge even when that step does not reduce distance to its opponent.
+            var friends=positions(b.id()).stream().filter(p->!p.id().equals(own.id())&&!npcRelations.enemy(own.id(),p.id())).map(p->new WorldMap.Hex(p.q(),p.r())).collect(java.util.stream.Collectors.toSet());
+            var candidates=new HashSet<WorldMap.Hex>();
+            for(var target:targets)for(int dq=-weapon.maxRange();dq<=weapon.maxRange();dq++)for(int dr=-weapon.maxRange();dr<=weapon.maxRange();dr++){
+                var h=new WorldMap.Hex(target.q()+dq,target.r()+dr);
+                if(within(b,h.q(),h.r())&&!blocked.contains(h))candidates.add(h);
+            }
+            for(var h:candidates){boolean legal=false;
+                for(int dq=-weapon.maxRange();dq<=weapon.maxRange()&&!legal;dq++)for(int dr=-weapon.maxRange();dr<=weapon.maxRange()&&!legal;dr++){
+                    var cells=WeaponRules.battlefieldCells(weapon,h,new WorldMap.Hex(h.q()+dq,h.r()+dr),radius(b));
+                    legal=cells.stream().noneMatch(friends::contains)&&targets.stream().anyMatch(t->cells.contains(new WorldMap.Hex(t.q(),t.r())));
+                }
+                if(legal){result.put(h,0);queue.add(h);}
+            }
+        }
+        while(!queue.isEmpty()){var h=queue.remove();for(var n:h.neighbors())if(within(b,n.q(),n.r())&&!blocked.contains(n)&&!result.containsKey(n)){result.put(n,result.get(h)+1);queue.add(n);}}
+        return result;
+    }
+    private boolean collectForNpc(Encounter b,Position own,Set<UUID> online,long now){
+        var rows=db.queryForList("select l.id,l.battle_q,l.battle_r from npc_tasks t join loot_containers l on l.id=t.corpse_id where t.actor_id=? and l.battle_id=? and l.carrier_id is null and l.expires_at>?",own.id(),b.id(),now);
+        if(rows.isEmpty())return false;var row=rows.getFirst();var goal=new WorldMap.Hex(((Number)row.get("battle_q")).intValue(),((Number)row.get("battle_r")).intValue());var from=new WorldMap.Hex(own.q(),own.r());
+        if(from.equals(goal)){
+            if(b.points()<2){endTurn(own.id(),online,now);return true;}UUID corpse=(UUID)row.get("id");var context=lootContext(own.id(),b.version());requireLootAction(own.id());
+            String action=loot.contents(corpse,context,now).isEmpty()?"carry":"takeAll";loot.execute(context,new LootService.Command(action,corpse,null,null,b.version(),b.id(),null),now);payLootAction(own.id(),online,now);return true;
+        }
+        var blocked=new HashSet<>(terrainBlocked(b));positions(b.id()).stream().filter(p->!p.id().equals(own.id())&&(characters.get(p.id()).alive()||characters.get(p.id()).life().equals("down"))).forEach(p->blocked.add(new WorldMap.Hex(p.q(),p.r())));
+        var route=BattleMovement.path(radius(b),from,goal,blocked);if(route.isEmpty()||b.points()<1){endTurn(own.id(),online,now);return true;}var next=route.get(Math.min(route.size(),b.points())-1);step(own.id(),next.q(),next.r(),online,now);return true;
+    }
+    private void retreatNpc(Encounter b,Position own,Set<UUID> online,long now){
+        db.update("update npc_tasks set task=case when corpse_id is null then 'return' else task end,target_id=null,alarm_id=null where actor_id=?",own.id());
+        var from=new WorldMap.Hex(own.q(),own.r());var blocked=new HashSet<>(terrainBlocked(b));
+        positions(b.id()).stream().filter(p->!p.id().equals(own.id())).forEach(p->blocked.add(new WorldMap.Hex(p.q(),p.r())));
+        WorldMap.Hex destination=null;int best=Integer.MAX_VALUE;
+        for(var edge:edges(b))if(edge.walkable()){
+            if(edge.cell()!=null&&edge.cell().equals(from)||edge.direction()<6&&sides(b,own.q(),own.r()).contains(edge.direction())){withdraw(own.id(),edge.direction(),b.turnStartEdge()&&b.points()==6,online,now);return;}
+            var candidates=scene(b).cells().stream().filter(SceneMap.Cell::walkable).map(SceneMap.Cell::hex).filter(h->edge.cell()!=null?h.equals(edge.cell()):sides(b,h.q(),h.r()).contains(edge.direction())).toList();
+            for(var h:candidates){var route=BattleMovement.path(radius(b),from,h,blocked);if(!route.isEmpty()&&route.size()<best){best=route.size();destination=route.get(Math.min(route.size(),Math.max(1,b.points()))-1);}}
+        }
+        if(destination!=null&&b.points()>0)step(own.id(),destination.q(),destination.r(),online,now);else endTurn(own.id(),online,now);
     }
     public boolean resume(UUID actor,long now){
         Encounter b=forActor(actor);
@@ -756,6 +802,7 @@ public class BattleService {
         return true;
     }
     public void reset(){
-        for(Encounter b:encounters(""))db.update("delete from battle_encounters where id=?",b.id());
+        aiNext.clear();
+        for(Encounter b:encounters("")){loot.closeBattle(b.id());db.update("delete from battle_encounters where id=?",b.id());}
     }
 }

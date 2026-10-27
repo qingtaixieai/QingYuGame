@@ -15,6 +15,29 @@ import java.security.SecureRandom;
 /** One authoritative world owner in v1. All mutations enter this monitor; no network handler owns game state. */
 @Service
 public class WorldService {
+    @org.springframework.beans.factory.annotation.Autowired private NpcDirector npcs;
+    private boolean npcDispatching;
+    public synchronized boolean advanceNpcs(long now){
+        npcDispatching=true;
+        try{var actions=new NpcDirector.Actions(){
+            public void stop(UUID a){sceneRoutes.remove(a);routes.remove(a);}
+            public boolean moving(UUID a){return sceneRoutes.containsKey(a)||routes.containsKey(a);}
+            public void navigate(UUID a,NpcNavigation.Leg leg){switch(leg.action()){
+                case "move" -> moveScene(a,leg.cell().q(),leg.cell().r(),world.version());
+                case "door" -> useDoor(a,leg.door(),world.version());
+                case "cross" -> crossScene(a,leg.direction(),world.version());
+                case "arrived" -> {}
+                default -> throw AccountService.bad("未知导航动作");
+            }}
+            public void attack(UUID a,UUID target){if(battles.engaged(target))tx.executeWithoutResult(s->battles.joinResident(a,now));else startBattle(a,target,world.version());}
+            public void loot(UUID a,UUID corpse,String action){lootCommand(a,new LootService.Command(action,corpse,null,null,world.version(),battles.currentId(a),null));}
+            public void claim(UUID a,UUID station,UUID corpse){claimBounty(a,new LawService.Claim(station,corpse,UUID.nameUUIDFromBytes((a+":"+corpse).getBytes(java.nio.charset.StandardCharsets.UTF_8))));}
+            public void buy(UUID a,String code,int n){trade(a,new ShopService.Order("buy",List.of(new ShopService.Line(code,n,null)),UUID.randomUUID()));}
+            public void life(UUID a,String action){lifeAction(a,action,a);}
+        };tx.executeWithoutResult(s->npcs.prepare(now,actions));return npcs.tick(now,actions);}finally{npcDispatching=false;}
+    }
+    /** Advances queued NPC routes through the same terrain/occupancy step as human routes. */
+    synchronized void stepNpcRoutes(){tx.executeWithoutResult(s->{for(var e:new ArrayList<>(sceneRoutes.entrySet())){UUID a=e.getKey();if(!characters.get(a).npc())continue;var route=e.getValue();if(battles.engaged(a)||!characters.get(a).alive()||route.steps().isEmpty()){sceneRoutes.remove(a);continue;}if(!sceneRuntime.step(a,route.sceneId(),route.steps().remove())||route.steps().isEmpty())sceneRoutes.remove(a);}});}
     private final JdbcTemplate db;private final AccountService accounts;private final TransactionTemplate tx;
     private final JsonMapper json=JsonMapper.builder().build();
     private WorldMap world;
@@ -79,6 +102,7 @@ public class WorldService {
             if(!empty&&!previous.version().equals(world.version()))resources.extend(previous,world);
             ferry.initialize(world,System.currentTimeMillis());characters.initialize(world,System.currentTimeMillis());
             law.initialize(world);
+            npcs.initialize(world);
             battles.recoverAfterRestart(System.currentTimeMillis());
             sceneRuntime.reconcile(world);
         });
@@ -199,7 +223,7 @@ public class WorldService {
         WorldMap next=WorldMap.expand(WorldMap.generate(new SecureRandom().nextLong()));
         tx.executeWithoutResult(s->{db.update("update worlds set document=? where id=1",json.writeValueAsString(next));
             production.restart();db.update("update accounts set q=?,r=?",next.spawn().q(),next.spawn().r());resources.reset(next);loot.resetGround();battles.reset();ferry.reset(next,System.currentTimeMillis());characters.reset(next,System.currentTimeMillis());audit(actor,"regenerate",next.version());});
-        world=next;battles.world(world);scenes.initialize(world.version());routes.clear();sceneRoutes.clear();sceneRuntime.reconcile(world);emotes.clear();battleRevision++;broadcast();return world;
+        world=next;battles.world(world);scenes.initialize(world.version());law.initialize(world);npcs.initialize(world);routes.clear();sceneRoutes.clear();sceneRuntime.reconcile(world);emotes.clear();battleRevision++;broadcast();return world;
     }
     private LootService.Context lootContext(UUID id,String version,UUID battleId){
         if(!world.version().equals(version))throw AccountService.bad("世界已更新，请刷新");
@@ -340,7 +364,8 @@ public class WorldService {
         if(lifeChanged)battleRevision++;
         boolean monstersChanged=Boolean.TRUE.equals(tx.execute(s->{sceneRuntime.reconcile(world);var excluded=battles.actorIds();excluded.addAll(sceneRuntime.activeActors());return characters.wander(now,excluded);}));
         boolean sceneChanged=Boolean.TRUE.equals(tx.execute(s->{boolean changed=false;for(var entry:new ArrayList<>(sceneRoutes.entrySet())){UUID actor=entry.getKey();var route=entry.getValue();if(battles.engaged(actor)||!characters.get(actor).alive()||route.steps().isEmpty()){sceneRoutes.remove(actor);changed=true;continue;}var next=route.steps().remove();if(!sceneRuntime.step(actor,route.sceneId(),next)||route.steps().isEmpty())sceneRoutes.remove(actor);changed=true;}
-            for(UUID actor:sceneRuntime.activeActors()){var c=characters.get(actor);if(!c.npc()||c.kind().equals("service")||!c.alive()||production.current(actor)!=null||battles.engaged(actor)||db.queryForObject("select next_move from characters where id=?",Long.class,actor)>now)continue;var p=sceneRuntime.position(actor);var options=new ArrayList<>(p.hex().neighbors());Collections.shuffle(options);for(var next:options)if(sceneRuntime.step(actor,p.sceneId(),next)){changed=true;break;}db.update("update characters set next_move=? where id=?",now+4000,actor);}return changed;}));
+            return changed;}));
+        if(tick%3==0)sceneChanged=advanceNpcs(now)||sceneChanged;
         boolean encounterChanged=Boolean.TRUE.equals(tx.execute(s->monsterEncounters(now)));
         if(encounterChanged)battleRevision++;
         boolean ferryChanged=Boolean.TRUE.equals(tx.execute(s->ferry.advance(now)));
@@ -434,6 +459,7 @@ public class WorldService {
     public synchronized Object learnedSkills(UUID id){characters.get(id);return skills.learned(id);}
     public synchronized void grantSkill(UUID admin,UUID target,String code,boolean granted){characters.get(target);tx.executeWithoutResult(s->{skills.set(target,code,granted);if(!characters.get(target).npc())hotbar.sync(target);audit(admin,"skill",target+":"+code+":"+granted);});battleRevision++;broadcast();}
     private void broadcast(){
+        if(npcDispatching)return;
         if(connections.isEmpty())return;
 
         List<String> dead=new ArrayList<>();

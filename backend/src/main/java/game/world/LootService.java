@@ -49,6 +49,9 @@ public class LootService {
         law.snapshot(id,c.id(),now);
         // Players keep their inventory/equipment; their unique corpse carries legal entitlement only.
         if(!c.npc())return;
+        // Carried corpses remain independent instances when an NPC carrier dies.
+        // Drop them at the actual death scene with their preserved remaining lifetime.
+        db.update("update loot_containers carried set carrier_id=null,world_version=body.world_version,q=body.q,r=body.r,scene_id=body.scene_id,battle_id=body.battle_id,battle_q=body.battle_q,battle_r=body.battle_r,expires_at=?+carried.remaining_ms from loot_containers body where body.id=? and carried.carrier_id=?",now,id,c.id());
         // 生物背包物品随尸体掉落；装备的武器也一并进入尸体供玩家拾取。
         for(var row:db.queryForList("select item_code,quantity from inventories where character_id=? and quantity>0",c.id()))
             db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,?) on conflict(container_id,item_code) do update set quantity=loot_items.quantity+excluded.quantity",id,row.get("item_code"),row.get("quantity"));

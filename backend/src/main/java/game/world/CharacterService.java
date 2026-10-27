@@ -97,6 +97,7 @@ public class CharacterService {
         loot.createCorpse(c,world.version(),now);
         db.update("delete from character_statuses where character_id=?",id);
         db.update("update characters set life=?,hp=0,down_hp=0,death_q=?,death_r=?,timer_kind=?,timer_end=?,protected_until=0,saved_at=? where id=?",c.npc()?"dead":"soul",c.q,c.r,c.npc()?"respawn":null,c.npc()?now+(c.kind().equals("service")?300000:respawnMs):0,now,id);
+        db.update("update characters c set timer_end=?+p.respawn_ms from npc_tasks t join guard_posts p on p.id=t.post_id where t.actor_id=c.id and c.id=?",now,id);
         db.update("delete from world_actions where account_id=?",id);db.update("delete from ferry_passengers where account_id=?",id);
         // Death does not leave the jurisdiction; recall is a separate timed action.
     }

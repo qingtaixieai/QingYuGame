@@ -61,8 +61,9 @@ public class ShopService {
             }
         }
         var coins=coins(actor);
-        if(buy){var change=CoinPayment.pay(coins.get("copper_coin"),coins.get("silver_coin"),coins.get("gold_coin"),total);setCoin(actor,"copper_coin",change.copper());setCoin(actor,"silver_coin",change.silver());setCoin(actor,"gold_coin",change.gold());}
-        else setCoin(actor,"copper_coin",Math.addExact(coins.get("copper_coin"),total));
+        boolean npc=db.queryForObject("select kind<>'player' from characters where id=?",Boolean.class,actor);
+        if(buy&&!npc){var change=CoinPayment.pay(coins.get("copper_coin"),coins.get("silver_coin"),coins.get("gold_coin"),total);setCoin(actor,"copper_coin",change.copper());setCoin(actor,"silver_coin",change.silver());setCoin(actor,"gold_coin",change.gold());}
+        else if(!buy)setCoin(actor,"copper_coin",Math.addExact(coins.get("copper_coin"),total));
         Object result=Map.of("total",total,"coins",coins(actor),"message",buy?"购买完成":"出售完成");
         db.update("insert into transaction_receipts values(?,?,'shop',?,?,?)",actor,order.requestId(),payload(order),json.writeValueAsString(result),System.currentTimeMillis());return result;
     }
