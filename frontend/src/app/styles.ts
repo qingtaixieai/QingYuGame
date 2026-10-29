@@ -1,0 +1,19 @@
+// Explicit cascade order preserved from the pre-refactor entry graph.
+import '../pixel.css';
+import '../loot.css';
+import '../social.css';
+import '../character.css';
+import '../statuses.css';
+import '../container.css';
+import '../ferry.css';
+import '../shop.css';
+import '../production.css';
+import '../combatLog.css';
+import '../battleInventory.css';
+import '../hotbar.css';
+import '../scene.css';
+import '../style.css';
+import '../viewport.css';
+import '../battle.css';
+import '../mobile.css';
+import '../interfaceRefresh.css';

@@ -1,3 +1,5 @@
+import type {ScenePosition,SceneResident,SceneDoor,SceneMap} from './shared/scene';
+export type {ScenePosition,SceneResident,SceneDoor,SceneMap} from './shared/scene';
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {api} from './api';
 import {bindMapGestures} from './mapGestures';
@@ -5,10 +7,6 @@ import type {Hex,LootContainer} from './types';
 import {groundColor,sceneKey,scenePath,scenePolygon,sceneSides,sceneXY,type SceneCell} from './sceneGeometry';
 import './scene.css';
 import type {SceneObject} from './ProductionPanel';
-export type ScenePosition=Hex&{characterId:string;sceneId:string};
-export type SceneResident=Hex&{id:string;username:string;life:string;hp:number;maxHp:number;kind:string};
-export type SceneDoor={id:string;name:string;cell:Hex;destinationScene:string;destination:Hex;open:boolean};
-type SceneMap={level:number;id:string;worldVersion:string;name:string;radius:number;owner:Hex;cells:SceneCell[]};
 export function SceneView({position,doors,service,onShop,onRest,objects,onFacility,residents,loot,onLoot,moving,connected,me,onMessage,onBattle}:{position:ScenePosition;doors:SceneDoor[];service:string|null;onShop:()=>void;onRest:()=>void;objects:SceneObject[];onFacility:(o:SceneObject)=>void;residents:SceneResident[];loot:LootContainer[];onLoot:(id:string)=>void;moving:boolean;connected:boolean;me:string;onMessage:(s:string)=>void;onBattle:(id:string)=>void}){
  const [map,setMap]=useState<SceneMap|null>(null),[selected,setSelected]=useState<Hex|null>(null),[move,setMove]=useState(false),[preview,setPreview]=useState<Hex[]>([]),[busy,setBusy]=useState(false);
  const [boards,setBoards]=useState<{id:string;board_q:number;board_r:number;faction_name:string}[]>([]);

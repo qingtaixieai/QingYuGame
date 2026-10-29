@@ -48,6 +48,34 @@ def check_links(file):
     return errors
 
 
+def check_frontend_layers(root):
+    errors = []
+    for file in root.rglob('*'):
+        if file.suffix not in {'.ts', '.tsx'}:
+            continue
+        layer = file.relative_to(root).parts[0]
+        if layer not in {'shared', 'components', 'features'}:
+            continue
+        source = file.read_text(encoding='utf-8-sig')
+        for spec in re.findall(r'''(?:from\s*|import\s*\(\s*|import\s*)['"]([^'"]+)''', source):
+            if not spec.startswith('.'):
+                if layer == 'shared':
+                    errors.append(f'shared protocol imports external module: {file.name} -> {spec}')
+                continue
+            target = (file.parent / spec).resolve()
+            try:
+                target_layer = target.relative_to(root.resolve()).parts[0]
+            except ValueError:
+                errors.append(f'source import escapes frontend: {file.name} -> {spec}')
+                continue
+            forbidden = ((layer == 'shared' and target_layer != 'shared')
+                         or (layer == 'components' and target_layer in {'app', 'features'})
+                         or (layer == 'features' and target_layer == 'app'))
+            if forbidden:
+                errors.append(f'layer dependency: {file.relative_to(root)} -> {spec}')
+    return errors
+
+
 def main():
     manifest = json.loads((ROOT / 'config/module-ownership.json').read_text(encoding='utf-8'))
     errors = []
@@ -61,6 +89,7 @@ def main():
     routes, route_errors = scan_routes(ROOT / 'backend/src/main/java')
     errors += route_errors
     errors += compare_routes(routes, json.loads((ROOT / 'contracts/http-routes.json').read_text(encoding='utf-8'))['routes'])
+    errors += check_frontend_layers(ROOT / 'frontend/src')
     for file in [ROOT / 'docs/交接索引.md', *sorted((ROOT / 'docs/engineering').rglob('*.md'))]:
         errors += check_links(file)
     for error in errors:

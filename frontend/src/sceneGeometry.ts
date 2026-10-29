@@ -1,5 +1,6 @@
+import type {SceneCell} from './shared/scene';
+export type {SceneCell} from './shared/scene';
 import type {Hex} from './types';
-export type SceneCell=Hex&{terrain:string;walkable:boolean};
 export const sceneKey=(h:Hex)=>`${h.q},${h.r}`;
 export const sceneXY=(h:Hex)=>({x:54*h.q,y:Math.sqrt(3)*36*(h.r+h.q/2)});
 export const scenePolygon=(h:Hex)=>{const p=sceneXY(h);return Array.from({length:6},(_,i)=>`${p.x+35*Math.cos(i*Math.PI/3)},${p.y+35*Math.sin(i*Math.PI/3)}`).join(' ');};

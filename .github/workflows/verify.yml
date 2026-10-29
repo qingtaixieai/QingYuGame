@@ -21,7 +21,7 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
-      - run: node --experimental-strip-types --test scripts/*.test.mjs
+      - run: node --experimental-strip-types --test scripts/*.test.mjs scripts/map-gestures-test.mjs
   server:
     runs-on: ubuntu-latest
     services:

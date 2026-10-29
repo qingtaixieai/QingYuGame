@@ -38,6 +38,21 @@ class EngineeringCheckTest(unittest.TestCase):
             page.write_text('[ok](https://example.com) [missing](missing.md) [anchor](#part)')
             self.assertEqual(len(self.check.check_links(page)), 1)
 
+    def test_shared_protocol_cannot_depend_on_ui_and_feature_cannot_depend_on_app(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'shared').mkdir()
+            (root / 'features').mkdir()
+            (root / 'app').mkdir()
+            (root / 'shared/protocol.ts').write_text("import type {State} from '../Panel';")
+            (root / 'Panel.tsx').write_text('export type State = {};')
+            (root / 'features/Game.tsx').write_text("import {App} from '../app/App';")
+            (root / 'app/App.tsx').write_text('export function App(){}')
+            self.assertEqual(len(self.check.check_frontend_layers(root)), 2)
+            (root / 'shared/protocol.ts').write_text('export type State = {};')
+            (root / 'features/Game.tsx').write_text("import type {State} from '../shared/protocol';")
+            self.assertEqual(self.check.check_frontend_layers(root), [])
+
 
 if __name__ == '__main__':
     unittest.main()

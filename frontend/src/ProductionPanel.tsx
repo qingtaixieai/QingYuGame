@@ -1,12 +1,10 @@
+import type {SceneObject,Recipe,Task,ProductionState} from './shared/production';
+export type {SceneObject,Recipe,Task,ProductionState} from './shared/production';
 import {useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {api} from './api';
 import type {Item} from './types';
 import './production.css';
-export type SceneObject={id:string;kind:'resource'|'facility';code:string;name:string;q:number;r:number;depleted:boolean;inUse:boolean};
-type Recipe={code:string;name:string;materials:Record<string,number>;facility:string;duration:number;output:number;batch:boolean};
-type Task={kind:string;recipe:string|null;startedAt:number;dueAt:number;total:number;completed:number};
-export type ProductionState={recipes:Recipe[];task:Task|null;reserved:{item_code:string;quantity:number}[];notice?:{message:string;created_at:number}|null;skinTargets?:{id:string;name:string}[]};
 const facilities:Record<string,string>={portable:'随身',workbench:'工作台',furnace:'熔炉',anvil:'铁砧'};
 export function ProductionPanel({state,items,facility,onFacility,disabled,battle,clock,onMessage}:{state:ProductionState|null;items:Item[];facility:SceneObject|null;onFacility:(v:SceneObject|null)=>void;disabled:boolean;battle:boolean;clock:number;onMessage:(s:string)=>void}){
  const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[selected,setSelected]=useState('bandage'),[batches,setBatches]=useState(1),[message,setMessage]=useState('');
