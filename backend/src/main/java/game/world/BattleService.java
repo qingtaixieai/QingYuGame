@@ -53,6 +53,7 @@ public class BattleService {
     private final JdbcTemplate db;
     private final AccountService accounts;
     private final CharacterService characters;
+    private final BattleJournal journal;
     private final EquipmentService equipment;
     private final LootService loot;
     private final CombatActions combatActions;
@@ -80,7 +81,7 @@ public class BattleService {
 
     BattleService(JdbcTemplate db,AccountService accounts,CharacterService characters,EquipmentService equipment,LootService loot,CombatActions combatActions,StatusService statuses,@Value("${game.battle.turn-ms:45000}") long turnMillis){
         this.statuses=statuses;
-        this.db=db;this.accounts=accounts;this.characters=characters;this.equipment=equipment;this.loot=loot;this.combatActions=combatActions;this.turnMillis=Math.max(5000,turnMillis);
+        this.db=db;this.accounts=accounts;this.characters=characters;this.journal=new BattleJournal(db,characters);this.equipment=equipment;this.loot=loot;this.combatActions=combatActions;this.turnMillis=Math.max(5000,turnMillis);
     }
 
     private List<Encounter> encounters(String where,Object... args){
@@ -100,44 +101,21 @@ public class BattleService {
     private static boolean exit(int q,int r){return !sides(q,r).isEmpty();}
     private static RuntimeException bad(String message){return AccountService.bad(message);}
     private void event(UUID battle,String kind,UUID actor,UUID target,Integer q,Integer r,long now){
-        event(battle,kind,actor,target,q,r,now,null,null);
+        journal.event(battle,kind,actor,target,q,r,now);
     }
-    private void detailLast(UUID battle,Map<String,Object> details){db.update("update battle_events set details=? where id=(select max(id) from battle_events where encounter_id=?)",json.writeValueAsString(details),battle);}
-    @SuppressWarnings("unchecked")
+    private void detailLast(UUID battle,Map<String,Object> details){journal.detailLast(battle,details);}
     public Object publicCurrent(UUID viewer,Set<UUID> online){
-        Map<String,Object> data=json.readValue(json.writeValueAsString(current(viewer,online)),Map.class);
-        for(var raw:(List<Map<String,Object>>)data.getOrDefault("actors",List.of()))if(!viewer.toString().equals(raw.get("accountId"))){
-            var profile=(Map<String,Object>)raw.get("character");
-            for(String field:List.of("strength","agility","constitution","intellect","perception","willpower","weapon","offhand","body","bindQ","bindR","deathQ","deathR","timerKind","timerEnd","protectedUntil"))profile.remove(field);
-            raw.remove("loadout");raw.remove("weapon");raw.remove("initiativeRoll");raw.remove("initiativeScore");
-        }
-        redactEvents(data,viewer);
-        for(var raw:(List<Map<String,Object>>)data.getOrDefault("intents",List.of()))if(!viewer.toString().equals(raw.get("attackerId"))){raw.remove("damage");raw.remove("weapon");}
-        return data;
+        return BattleJournal.publicView(current(viewer,online),viewer,true);
     }
     private void event(UUID battle,String kind,UUID actor,UUID target,Integer q,Integer r,long now,Integer amount,Integer blocked){
-        db.update("insert into battle_events(encounter_id,kind,actor_id,target_id,q,r,happened_at,actor_name,target_name,amount,blocked) values(?,?,?,?,?,?,?,?,?,?,?)",battle,kind,actor,target,q,r,now,actor==null?null:characters.get(actor).name(),target==null?null:characters.get(target).name(),amount,blocked);
+        journal.event(battle,kind,actor,target,q,r,now,amount,blocked);
     }
-    private List<Event> events(UUID battle,int limit){
-        var result=db.query("select * from battle_events where encounter_id=? order by id desc limit ?",(rs,n)->new Event(rs.getLong("id"),rs.getString("kind"),rs.getObject("actor_id",UUID.class),rs.getObject("target_id",UUID.class),(Integer)rs.getObject("q"),(Integer)rs.getObject("r"),rs.getLong("happened_at"),rs.getString("actor_name"),rs.getString("target_name"),(Integer)rs.getObject("amount"),(Integer)rs.getObject("blocked"),rs.getString("details")==null?Map.of():json.readValue(rs.getString("details"),Map.class)),battle,limit);
-        Collections.reverse(result);return result;
-    }
+    private List<Event> events(UUID battle,int limit){return journal.events(battle,limit);}
     public Object report(UUID actor){
-        var b=forActor(actor);if(b!=null)return Map.of("battleId",b.id(),"active",true,"events",events(b.id(),1000));
-        return db.query("select document from recent_battle_reports where character_id=?",(r,n)->json.readValue(r.getString(1),Object.class),actor).stream().findFirst().orElse(Map.of("active",false,"events",List.of()));
+        var b=forActor(actor);return journal.report(actor,b==null?null:b.id());
     }
-    @SuppressWarnings("unchecked")
     public Object publicReport(UUID actor){
-        Map<String,Object> data=json.readValue(json.writeValueAsString(report(actor)),Map.class);
-        redactEvents(data,actor);return data;
-    }
-    @SuppressWarnings("unchecked")
-    private void redactEvents(Map<String,Object> data,UUID actor){
-        for(var e:(List<Map<String,Object>>)data.getOrDefault("events",List.of())){
-            var details=(Map<String,Object>)e.get("details");if(details==null)continue;
-            if(!actor.toString().equals(e.get("targetId"))){details.remove("armorReduction");details.remove("shieldReduction");}
-            if(!actor.toString().equals(e.get("actorId"))){details.remove("weapon");details.remove("item");details.remove("quantity");}
-        }
+        return BattleJournal.publicView(report(actor),actor,false);
     }
 
     public boolean engaged(UUID user){return forActor(user)!=null;}
@@ -615,8 +593,7 @@ public class BattleService {
         db.update("delete from battle_intents where encounter_id=?",id);
         db.update("delete from battle_actors where encounter_id=?",id);
         event(id,"close",null,null,null,null,now);
-        String document=json.writeValueAsString(Map.of("battleId",id,"active",false,"finishedAt",now,"events",events(id,1000)));
-        db.update("insert into recent_battle_reports(character_id,encounter_id,finished_at,document) select character_id,?,?,? from battle_members where encounter_id=? on conflict(character_id) do update set encounter_id=excluded.encounter_id,finished_at=excluded.finished_at,document=excluded.document",id,now,document,id);
+        journal.saveReport(id,now);
     }
     public boolean advance(Set<UUID> online,long now){
         boolean changed=false;
@@ -740,30 +717,15 @@ public class BattleService {
         else step(own.id(),choice.cell().q(),choice.cell().r(),online,now);
     }
     private Map<WorldMap.Hex,Integer> npcDistances(Encounter b,Position own,List<Position> targets){
-        var blocked=new HashSet<>(terrainBlocked(b));positions(b.id()).stream().filter(p->!p.id().equals(own.id())).forEach(p->blocked.add(new WorldMap.Hex(p.q(),p.r())));
-        var result=new HashMap<WorldMap.Hex,Integer>();var queue=new ArrayDeque<WorldMap.Hex>();
+        var occupied=positions(b.id()).stream().filter(p->!p.id().equals(own.id())).toList();
+        var blocked=new HashSet<>(terrainBlocked(b));
+        occupied.forEach(p->blocked.add(new WorldMap.Hex(p.q(),p.r())));
+        var friends=occupied.stream().filter(p->!npcRelations.enemy(own.id(),p.id()))
+            .map(p->new WorldMap.Hex(p.q(),p.r())).collect(java.util.stream.Collectors.toSet());
         var weapon=characters.weapon(own.id());
-        if(equipment.projectile(weapon.code())!=null){
-            for(var t:targets){var h=new WorldMap.Hex(t.q(),t.r());result.put(h,0);queue.add(h);}
-        }else{
-            // Approach a legal attack stance, not the occupied target tile. A spear may need to
-            // sidestep at an edge even when that step does not reduce distance to its opponent.
-            var friends=positions(b.id()).stream().filter(p->!p.id().equals(own.id())&&!npcRelations.enemy(own.id(),p.id())).map(p->new WorldMap.Hex(p.q(),p.r())).collect(java.util.stream.Collectors.toSet());
-            var candidates=new HashSet<WorldMap.Hex>();
-            for(var target:targets)for(int dq=-weapon.maxRange();dq<=weapon.maxRange();dq++)for(int dr=-weapon.maxRange();dr<=weapon.maxRange();dr++){
-                var h=new WorldMap.Hex(target.q()+dq,target.r()+dr);
-                if(within(b,h.q(),h.r())&&!blocked.contains(h))candidates.add(h);
-            }
-            for(var h:candidates){boolean legal=false;
-                for(int dq=-weapon.maxRange();dq<=weapon.maxRange()&&!legal;dq++)for(int dr=-weapon.maxRange();dr<=weapon.maxRange()&&!legal;dr++){
-                    var cells=WeaponRules.battlefieldCells(weapon,h,new WorldMap.Hex(h.q()+dq,h.r()+dr),radius(b));
-                    legal=cells.stream().noneMatch(friends::contains)&&targets.stream().anyMatch(t->cells.contains(new WorldMap.Hex(t.q(),t.r())));
-                }
-                if(legal){result.put(h,0);queue.add(h);}
-            }
-        }
-        while(!queue.isEmpty()){var h=queue.remove();for(var n:h.neighbors())if(within(b,n.q(),n.r())&&!blocked.contains(n)&&!result.containsKey(n)){result.put(n,result.get(h)+1);queue.add(n);}}
-        return result;
+        return NpcCombatNavigation.distances(radius(b),
+            targets.stream().map(t->new WorldMap.Hex(t.q(),t.r())).toList(),blocked,friends,weapon,
+            equipment.projectile(weapon.code())!=null);
     }
     private boolean collectForNpc(Encounter b,Position own,Set<UUID> online,long now){
         var rows=db.queryForList("select l.id,l.battle_q,l.battle_r from npc_tasks t join loot_containers l on l.id=t.corpse_id where t.actor_id=? and l.battle_id=? and l.carrier_id is null and l.expires_at>?",own.id(),b.id(),now);
