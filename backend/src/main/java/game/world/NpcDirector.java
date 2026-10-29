@@ -104,7 +104,8 @@ public class NpcDirector {
  public boolean tick(long now,Actions actions){
   if(world==null)return false;boolean changed=false;
   for(var t:db.queryForList("select t.* from npc_tasks t join characters c on c.id=t.actor_id where c.life='alive' order by t.actor_id")){
-   UUID actor=(UUID)t.get("actor_id");var p=runtime.position(actor);if(p==null||battles.engaged(actor)||actions.moving(actor)||db.queryForObject("select exists(select 1 from production_tasks where actor_id=?)",Boolean.class,actor))continue;
+   UUID actor=(UUID)t.get("actor_id");var p=runtime.position(actor);if(p==null||"courier".equals(characters.get(actor).species())||battles.engaged(actor)||actions.moving(actor)||db.queryForObject("select exists(select 1 from production_tasks where actor_id=?)",Boolean.class,actor))continue;
+   if(!"pursue".equals(t.get("task"))&&Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from logistics_stops where target=? and accepted and expires_at>?)",Boolean.class,actor,now)))continue;
    UUID target=(UUID)t.get("target_id");var tp=target==null?null:runtime.position(target);String signature=p.sceneId()+":"+p.hex()+":"+tp+":"+characters.get(actor).hp();
    if(time(t,"next_think")>now&&signature.equals(t.get("signature")))continue;
    try{decide(t,now,actions);db.update("update npc_tasks set failures=0,next_think=?,signature=? where actor_id=?",now+1000,signature,actor);changed=true;}
@@ -114,6 +115,11 @@ public class NpcDirector {
  private void decide(Map<String,Object> t,long now,Actions actions){
   UUID actor=(UUID)t.get("actor_id");var self=characters.get(actor);var p=runtime.position(actor);String current=(String)t.get("task");boolean guard=t.get("post_id")!=null;
   if(self.hp()<self.maxHp()&&(equipment.has(actor,"healing_potion")||equipment.has(actor,"bandage"))){actions.life(actor,equipment.has(actor,"healing_potion")?"potion":"bandage");return;}
+  if(Set.of("idle","return").contains(current)){
+   var pickup=db.queryForList("select p.scene_id,p.q,p.r from logistics_needs n join logistics_posts p on p.id=n.post_id where n.recipient=? and n.state='pickup' and n.pickup_active order by n.urgency desc,n.created_at limit 1",actor);
+   boolean mayCollect=!guard||db.queryForObject("select count(*) from npc_tasks t join characters c on c.id=t.actor_id where t.post_id=? and t.task='idle' and c.life='alive'",Integer.class,t.get("post_id"))>db.queryForObject("select minimum from guard_posts where id=?",Integer.class,t.get("post_id"));
+   if(!pickup.isEmpty()&&mayCollect){var point=pickup.getFirst();go(actor,(UUID)point.get("scene_id"),cell(point,"q","r"),1,actions);return;}
+  }
   // Carrying a bounty is a hard responsibility, not just another score.
   var carried=db.queryForList("select l.id,b.faction_id from loot_containers l join corpse_bounties b on b.corpse_id=l.id where l.carrier_id=? order by l.created_at",actor);
   if(!carried.isEmpty()){
@@ -147,7 +153,7 @@ public class NpcDirector {
   }
   // Shared purchases use actual configured shortages. A guard must leave the minimum at post.
   boolean mayLeave=!guard||db.queryForObject("select count(*) from npc_tasks t join characters c on c.id=t.actor_id where t.post_id=? and t.task='idle' and c.life='alive' and not exists(select 1 from battle_actors a join battle_encounters b on b.id=a.encounter_id where b.active and a.account_id=t.actor_id)",Integer.class,t.get("post_id"))>db.queryForObject("select minimum from guard_posts where id=?",Integer.class,t.get("post_id"))||current.equals("supply");
-  var shortages=db.queryForList("select code as item_code,quantity from npc_supply_targets where actor=? order by code",actor);
+  var shortages=db.queryForList("select t.code as item_code,t.quantity from npc_supply_targets t where t.actor=? and not exists(select 1 from logistics_needs n where n.recipient=t.actor and n.code=t.code and n.kind='supply' and n.state in ('claimed','pickup')) order by t.code",actor);
   if(mayLeave)for(var shortage:shortages){String code=(String)shortage.get("item_code");int amount=Math.toIntExact(Math.max(0,num(shortage,"quantity")-equipment.available(actor,code)));if(amount==0)continue;
    var shops=db.queryForList("select b.id,p.q,p.r from town_buildings b join scene_positions p on p.character_id=b.npc_id and p.scene_id=b.id and p.active join characters c on c.id=b.npc_id join scene_documents d on d.id=b.outdoor_id where b.kind='shop' and c.life='alive'");
    Map<String,Object> best=null;int cost=Integer.MAX_VALUE;for(var s:shops){var scene=runtime.map((UUID)s.get("id"));if(!samePlace(self.hex(),scene.owner()))continue;var leg=navigation.route(actor,scene.id(),cell(s,"q","r"),1,world,true);if(leg!=null&&leg.cost()<cost){cost=leg.cost();best=s;}}

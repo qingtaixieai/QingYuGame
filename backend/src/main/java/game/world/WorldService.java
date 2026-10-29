@@ -16,6 +16,10 @@ import java.security.SecureRandom;
 @Service
 public class WorldService {
     @org.springframework.beans.factory.annotation.Autowired private NpcDirector npcs;
+    @org.springframework.beans.factory.annotation.Autowired private LogisticsRoster logisticsRoster;
+    @org.springframework.beans.factory.annotation.Autowired private LogisticsDemandService logisticsDemands;
+    @org.springframework.beans.factory.annotation.Autowired private LogisticsDirector logisticsDirector;
+    @org.springframework.beans.factory.annotation.Autowired private LogisticsLedger logisticsLedger;
     private boolean npcDispatching;
     public synchronized boolean advanceNpcs(long now){
         npcDispatching=true;
@@ -34,7 +38,28 @@ public class WorldService {
             public void claim(UUID a,UUID station,UUID corpse){claimBounty(a,new LawService.Claim(station,corpse,UUID.nameUUIDFromBytes((a+":"+corpse).getBytes(java.nio.charset.StandardCharsets.UTF_8))));}
             public void buy(UUID a,String code,int n){trade(a,new ShopService.Order("buy",List.of(new ShopService.Line(code,n,null)),UUID.randomUUID()));}
             public void life(UUID a,String action){lifeAction(a,action,a);}
-        };tx.executeWithoutResult(s->npcs.prepare(now,actions));return npcs.tick(now,actions);}finally{npcDispatching=false;}
+        };tx.executeWithoutResult(s->{npcs.prepare(now,actions);logisticsRoster.ensure(now);logisticsDemands.synchronize(now);});
+        var cargo=new LogisticsDirector.Actions(){
+            public boolean moving(UUID a){return actions.moving(a);}
+            public void navigate(UUID a,NpcNavigation.Leg leg){if(!battles.engaged(a)){actions.navigate(a,leg);return;}if(!leg.action().equals("move"))throw AccountService.bad("战斗中须按撤离规则离场");var p=sceneRuntime.position(a);var path=sceneRuntime.map(p.sceneId()).topology().path(p.hex(),leg.cell(),sceneRuntime.occupied(p.sceneId(),a));if(path.isEmpty())throw AccountService.bad("战斗路线受阻");var next=path.getFirst();battles.step(a,next.q(),next.r(),onlineUsers(),System.currentTimeMillis());}
+            public void collect(LogisticsLedger.Need need,long at){var request=new HandoverService.Offer(need.carrier(),"gift",List.of(),UUID.randomUUID(),List.of(need.corpse()));UUID id=handovers.proposeLogistics(need.recipient(),request,need.id(),need.version(),null,at);var accepted=handovers.npcAcceptance(id);if(accepted==null)throw AccountService.bad("暂时不能接尸");handovers.accept(need.carrier(),accepted,at);if(battles.engaged(need.recipient()))battles.payHandover(need.recipient(),onlineUsers(),at);}
+            public void claim(UUID a,UUID station,UUID corpse,long at){actions.claim(a,station,corpse);}
+            public void transfer(LogisticsLedger.Need need,UUID sender,int quantity,long cost,long at){var request=new HandoverService.Offer(need.carrier(),"sell",List.of(new HandoverService.Line(need.code(),quantity)),UUID.randomUUID());UUID id=handovers.proposeLogistics(sender,request,need.id(),need.version(),cost,at);var accepted=handovers.npcAcceptance(id);if(accepted==null)throw AccountService.bad("调货接收失败");handovers.accept(need.carrier(),accepted,at);if(battles.engaged(sender))battles.payHandover(sender,onlineUsers(),at);}
+            public void buy(UUID a,String code,int quantity,UUID post,long at){UUID receipt=UUID.randomUUID();long price=db.queryForObject("select buy_price from item_definitions where code=?",Long.class,code);trade(a,new ShopService.Order("buy",List.of(new ShopService.Line(code,quantity,null)),receipt));logisticsLedger.purchase(a,post,code,quantity,price,receipt,at);}
+            public void deliver(LogisticsLedger.Need need,long at){int quantity=need.reserved();logisticsLedger.releaseForHandover(need.id(),need.version(),need.carrier(),quantity);var request=new HandoverService.Offer(need.recipient(),"sell",List.of(new HandoverService.Line(need.code(),quantity)),UUID.randomUUID());UUID id=handovers.proposeLogistics(need.carrier(),request,need.id(),need.version(),null,at);var accepted=handovers.npcAcceptance(id);if(accepted==null)throw AccountService.bad("收货方暂不接受配送");handovers.accept(need.recipient(),accepted,at);if(battles.engaged(need.carrier()))battles.payHandover(need.carrier(),onlineUsers(),at);hotbar.sync(need.carrier());hotbar.sync(need.recipient());}
+        };
+        battles.logisticsAction((actor,at)->{
+            var deliverable=logisticsLedger.query("where carrier=? and kind='supply' and reserved>0 and state in ('claimed','pickup') order by urgency desc,created_at,id",actor);
+            if(deliverable.isEmpty())return false;
+            var n=deliverable.getFirst();var a=sceneRuntime.position(actor);var b=sceneRuntime.position(n.recipient());
+            if(a==null||b==null||!characters.get(n.recipient()).alive()||!a.sceneId().equals(b.sceneId()))return false;
+            if(WorldMap.distance(a.hex(),b.hex())==1){cargo.deliver(n,at);return true;}
+            var map=sceneRuntime.map(a.sceneId());var occupied=sceneRuntime.occupied(a.sceneId(),actor);List<WorldMap.Hex> shortest=null;
+            for(var goal:b.hex().neighbors()){var path=map.topology().path(a.hex(),goal,occupied);if(!path.isEmpty()&&(shortest==null||path.size()<shortest.size()))shortest=path;}
+            if(shortest==null)return false;var next=shortest.getFirst();battles.step(actor,next.q(),next.r(),onlineUsers(),at);return true;
+        });
+        boolean logisticsChanged=false;for(UUID actor:logisticsDirector.ready(now))try{tx.executeWithoutResult(s->logisticsDirector.act(actor,world,now,cargo));logisticsChanged=true;}catch(org.springframework.web.server.ResponseStatusException rejected){tx.executeWithoutResult(s->logisticsDirector.rejected(actor,now));}
+        return npcs.tick(now,actions)||logisticsChanged;}finally{npcDispatching=false;}
     }
     /** Advances queued NPC routes through the same terrain/occupancy step as human routes. */
     synchronized void stepNpcRoutes(){tx.executeWithoutResult(s->{for(var e:new ArrayList<>(sceneRoutes.entrySet())){UUID a=e.getKey();if(!characters.get(a).npc())continue;var route=e.getValue();if(battles.engaged(a)||!characters.get(a).alive()||route.steps().isEmpty()){sceneRoutes.remove(a);continue;}if(!sceneRuntime.step(a,route.sceneId(),route.steps().remove())||route.steps().isEmpty())sceneRoutes.remove(a);}});}
@@ -68,6 +93,19 @@ public class WorldService {
     public synchronized Object acceptHandover(UUID actor,HandoverService.Accept request){tx.executeWithoutResult(s->handovers.prune(onlineUsers()));var result=tx.execute(s->{boolean old=handovers.completed(request.offerId());var out=handovers.accept(actor,request,System.currentTimeMillis());UUID sender=handovers.sender(request.offerId());if(!old&&battles.engaged(sender))battles.payHandover(sender,onlineUsers(),System.currentTimeMillis());hotbar.sync(actor);hotbar.sync(sender);return out;});battleRevision++;broadcast();return result;}
     public synchronized void cancelHandover(UUID actor,UUID id){tx.executeWithoutResult(s->handovers.cancel(actor,id));broadcast();}
     public synchronized Object lawStations(UUID actor){return law.stations(actor);}
+    public synchronized Object requestNpcStop(UUID actor,UUID target){return tx.execute(s->{
+        characters.requireAlive(actor);var npc=characters.get(target);var a=sceneRuntime.position(actor);var b=sceneRuntime.position(target);long now=System.currentTimeMillis();
+        if(!npc.npc()||a==null||b==null||!a.sceneId().equals(b.sceneId())||WorldMap.distance(a.hex(),b.hex())>1)throw AccountService.bad("请靠近要请求停留的NPC");
+        if(Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from logistics_stops where requester=? and target=? and requested_at>?)",Boolean.class,actor,target,now-10000)))throw AccountService.bad("请稍后再请求");
+        boolean accepted=npc.alive()&&!battles.engaged(target)&&npc.hp()*3>npc.maxHp()&&!Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from npc_tasks where actor_id=? and task in ('pursue','collect'))",Boolean.class,target));
+        db.update("insert into logistics_stops(requester,target,requested_at,expires_at,accepted) values(?,?,?,?,?) on conflict(requester,target) do update set requested_at=excluded.requested_at,expires_at=excluded.expires_at,accepted=excluded.accepted",actor,target,now,now+5000,accepted);
+        if(accepted){sceneRoutes.remove(target);routes.remove(target);}return Map.of("accepted",accepted,"message",accepted?"对方同意短暂停留":"对方正在忙，未同意停留");
+    });}
+    public synchronized Object logisticsView(UUID actor,boolean admin){
+        var needs=admin?db.queryForList("select n.id,n.kind,n.state,n.remaining,n.delivered,n.message,coalesce(c.name,'驻点备货') as recipient,coalesce(i.name,'尸体') as item from logistics_needs n left join characters c on c.id=n.recipient left join item_definitions i on i.code=n.code order by n.id desc limit 100"):db.queryForList("select n.id,n.kind,n.state,n.remaining,n.delivered,n.message,coalesce(c.name,'官方人员') as recipient,coalesce(i.name,'尸体') as item from logistics_needs n left join characters c on c.id=n.recipient left join item_definitions i on i.code=n.code where n.recipient=? or n.carrier=? order by n.id desc limit 100",actor,actor);
+        var events=admin?db.queryForList("select e.id,e.kind,e.code,e.quantity,e.copper,e.happened_at,coalesce(c.name,'已离开人员') as actor from logistics_events e left join characters c on c.id=e.actor order by e.id desc limit 100"):List.of();
+        return Map.of("admin",admin,"needs",needs,"events",events);
+    }
     public synchronized Object lawBoard(UUID actor,UUID station){return tx.execute(s->law.board(actor,station,System.currentTimeMillis()));}
     public synchronized Object lawEligible(UUID actor,UUID station){return law.eligible(actor,station);}
     public synchronized Object claimBounty(UUID actor,LawService.Claim claim){var result=tx.execute(s->law.claim(actor,claim,System.currentTimeMillis()));broadcast();return result;}

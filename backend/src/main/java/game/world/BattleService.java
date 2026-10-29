@@ -662,8 +662,11 @@ public class BattleService {
         characters.rescue(target);event(b.id(),"rescue",actor,target,t.q(),t.r(),now);advanceTurn(b,a.initiative(),online,now);
     }
     public void surrender(UUID actor,Set<UUID> online,long now){characters.die(actor,now);remove(actor,online,now);}
+    private java.util.function.BiPredicate<UUID,Long> logisticsAction=(actor,now)->false;
+    public void logisticsAction(java.util.function.BiPredicate<UUID,Long> action){logisticsAction=action;}
     private void actNpc(Encounter b,Set<UUID> online,long now){
         Position own=position(b.id(),b.turn());if(own==null)return;
+        if(logisticsAction.test(own.id(),now))return;
         var from=new WorldMap.Hex(own.q(),own.r());
         List<Position> targets=positions(b.id()).stream().filter(p->npcRelations.enemy(own.id(),p.id())).toList();
         boolean holdsPost=Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from npc_tasks where actor_id=? and post_id is not null and task='idle')",Boolean.class,own.id()));

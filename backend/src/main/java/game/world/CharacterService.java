@@ -8,6 +8,7 @@ import java.util.*;
 /** Shared player/creature lifecycle. All writes run in the world's transaction/monitor. */
 @Service
 public class CharacterService {
+    @org.springframework.beans.factory.annotation.Autowired private LogisticsLedger logistics;
     public record Character(UUID id,String kind,String species,String name,int q,int r,int hp,int maxHp,int downHp,int maxDownHp,String life,
         int strength,int agility,int constitution,int intellect,int perception,int willpower,String weapon,String offhand,String body,
         int bindQ,int bindR,Integer deathQ,Integer deathR,String timerKind,long timerEnd,long protectedUntil,
@@ -31,8 +32,9 @@ public class CharacterService {
     public void initialize(WorldMap world,long now){
         this.world=world;roamCache.clear();ensurePlayers();
         // Timers freeze during downtime; a reconnect never auto-revives a soul.
-        db.update("update characters set timer_end=?+greatest(0,timer_end-saved_at) where timer_end>0 and saved_at>0",now);
-        db.update("update characters set protected_until=?+greatest(0,protected_until-saved_at) where protected_until>saved_at and saved_at>0",now);
+        // Widen before arithmetic: long-lived/sentinel deadlines must not prevent startup.
+        db.update("update characters set timer_end=least(9223372036854775807::numeric,?::numeric+greatest(0,timer_end::numeric-saved_at))::bigint where timer_end>0 and saved_at>0",now);
+        db.update("update characters set protected_until=least(9223372036854775807::numeric,?::numeric+greatest(0,protected_until::numeric-saved_at))::bigint where protected_until>saved_at and saved_at>0",now);
         db.update("update characters set saved_at=?",now);
         var area=roamingArea();if(!area.isEmpty()){var h=area.getFirst();db.update("insert into characters(id,kind,species,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster','bully','恶霸',?,?,12,12,6,6,?,?,?) on conflict(id) do nothing",ISLAND_BEAST,h.q(),h.r(),h.q(),h.r(),now);
             if(db.queryForObject("select weapon is null from characters where id=?",Boolean.class,ISLAND_BEAST))kit(ISLAND_BEAST);}
@@ -94,10 +96,12 @@ public class CharacterService {
     }
     public void die(UUID id,long now){
         var c=get(id);if(c.life.equals("soul")||c.life.equals("dead"))return;
+        logistics.actorDied(id,now);
         loot.createCorpse(c,world.version(),now);
         db.update("delete from character_statuses where character_id=?",id);
         db.update("update characters set life=?,hp=0,down_hp=0,death_q=?,death_r=?,timer_kind=?,timer_end=?,protected_until=0,saved_at=? where id=?",c.npc()?"dead":"soul",c.q,c.r,c.npc()?"respawn":null,c.npc()?now+(c.kind().equals("service")?300000:respawnMs):0,now,id);
         db.update("update characters c set timer_end=?+p.respawn_ms from npc_tasks t join guard_posts p on p.id=t.post_id where t.actor_id=c.id and c.id=?",now,id);
+        db.update("update characters c set timer_end=?+p.respawn_ms from logistics_agents a join logistics_posts p on p.id=a.post_id where a.actor_id=c.id and c.id=?",now,id);
         db.update("delete from world_actions where account_id=?",id);db.update("delete from ferry_passengers where account_id=?",id);
         // Death does not leave the jurisdiction; recall is a separate timed action.
     }

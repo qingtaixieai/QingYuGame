@@ -18,6 +18,8 @@ public class GameController {
     @PostMapping("/handover/accept") public Object accept(@RequestBody HandoverService.Accept b,HttpServletRequest req){return world.acceptHandover(accounts.require(req,true,false).id(),b);}
     @PostMapping("/handover/cancel") public Object cancel(@RequestBody HandoverCancel b,HttpServletRequest req){world.cancelHandover(accounts.require(req,true,false).id(),b.offerId());return Map.of("message","已取消交接");}
     @GetMapping("/law/stations") public Object stations(HttpServletRequest req){return world.lawStations(accounts.require(req,true,false).id());}
+    @GetMapping("/logistics") public Object logistics(HttpServletRequest req){var actor=accounts.require(req,true,false);return world.logisticsView(actor.id(),actor.admin());}
+    @PostMapping("/logistics/stop/{target}") public Object logisticsStop(@PathVariable UUID target,HttpServletRequest req){return world.requestNpcStop(accounts.require(req,true,false).id(),target);}
     @GetMapping("/law/{id}/board") public Object board(@PathVariable UUID id,HttpServletRequest req){return world.lawBoard(accounts.require(req,true,false).id(),id);}
     @GetMapping("/law/{id}/corpses") public Object corpses(@PathVariable UUID id,HttpServletRequest req){return world.lawEligible(accounts.require(req,true,false).id(),id);}
     @PostMapping("/law/claim") public Object claim(@RequestBody LawService.Claim b,HttpServletRequest req){return world.claimBounty(accounts.require(req,true,false).id(),b);}

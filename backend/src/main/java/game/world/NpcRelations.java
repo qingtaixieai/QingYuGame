@@ -9,7 +9,7 @@ public class NpcRelations {
  private final JdbcTemplate db;private final CharacterService characters;private final LawService law;
  NpcRelations(JdbcTemplate db,CharacterService characters,LawService law){this.db=db;this.characters=characters;this.law=law;}
  public boolean malicious(UUID actor){return Boolean.TRUE.equals(db.queryForObject("select malicious from characters where id=?",Boolean.class,actor));}
- public String faction(UUID actor){return db.queryForList("select p.faction_id from npc_tasks t join guard_posts p on p.id=t.post_id where actor_id=?",String.class,actor).stream().findFirst().orElse(null);}
+ public String faction(UUID actor){return db.queryForList("select p.faction_id from npc_tasks t join guard_posts p on p.id=t.post_id where actor_id=? union all select p.faction_id from logistics_agents a join logistics_posts p on p.id=a.post_id where a.actor_id=?",String.class,actor,actor).stream().findFirst().orElse(null);}
  public boolean enemy(UUID actor,UUID target){
   if(actor.equals(target))return false;var a=characters.get(actor);var t=characters.get(target);
   if(!t.alive()&&!t.life().equals("down"))return false;
