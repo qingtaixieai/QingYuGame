@@ -2,6 +2,8 @@
 
 ## 工程协作入口
 
+- 接手先读 `docs/代理接手.md`：本轮完成状态、提交、验证与环境索引；再按下列入口定位具体规则。
+
 - 新任务先读 `docs/engineering/README.md` 和 `docs/交接索引.md`，按 `config/module-ownership.json` 确认文件负责人。多个代理不同时编辑同一文件，公共入口和契约由主代理集成。
 - 接口或模块结构改动必须运行 `python scripts/engineering_check.py`；该工具只检查路由集合、归属及工程文档链接，不替代运行测试。
 - 任务、接口对接、独立验收和发布记录按 `docs/engineering/` 模板；未经确认的建议不得写成已实现或已发布。
