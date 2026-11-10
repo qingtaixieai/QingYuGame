@@ -1,4 +1,4 @@
-/** Pointer gestures shared by the Pixi world and SVG battle. Pinching never becomes a tap. */
+/** Pointer gestures shared by the world, exploration and battle maps. Pinching never becomes a tap. */
 export function bindMapGestures(node:HTMLElement|SVGSVGElement,callbacks:{pan:(dx:number,dy:number)=>void;zoom:(factor:number,x:number,y:number)=>void;tap:(x:number,y:number)=>void}){
  const pointers=new Map<number,{x:number;y:number}>();let moved=false,origin={x:0,y:0};
  const point=(e:PointerEvent)=>{const r=node.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};};

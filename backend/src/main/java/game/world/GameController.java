@@ -13,12 +13,23 @@ public class GameController {
     GameController(AccountService accounts,WorldService world,ModerationService moderation){this.moderation=moderation;this.accounts=accounts;this.world=world;}
     record EmoteRequest(String code,String version) {}
     record Credentials(String username,String password) {}
+    public record DoorRequest(UUID doorId,String version) {}
+    @PostMapping("/scene/door") public Object door(@RequestBody DoorRequest body,HttpServletRequest req){world.useDoor(accounts.require(req,true,false).id(),body.doorId(),body.version());return Map.of("message","已通过门");}
+    @GetMapping("/production") public Object production(HttpServletRequest req){return world.production(accounts.require(req,true,false).id());}
+    @PostMapping("/production/start") public Object productionStart(@RequestBody ProductionService.Start body,HttpServletRequest req){world.startProduction(accounts.require(req,true,false).id(),body);return Map.of("message","任务已开始");}
+    @PostMapping("/production/cancel") public Object productionCancel(HttpServletRequest req){world.cancelProduction(accounts.require(req,true,false).id());return Map.of("message","任务已取消，未用材料已释放");}
     record Move(Integer q,Integer r,String version) {}
     record Approval(boolean approved) {}
     record Password(String password) {}
     record Regenerate(String confirmation) {}
     record BattleStart(UUID targetId,String version) {}
     record BattleJoin(UUID battleId,String version) {}
+    record SceneCommand(String version,Integer q,Integer r,Integer direction) {}
+    @GetMapping("/scene") public Object scene(HttpServletRequest req){return world.scene(accounts.require(req,true,false).id());}
+    @PostMapping("/scene/enter") public Object enterScene(@RequestBody SceneCommand b,HttpServletRequest req){world.enterScene(accounts.require(req,true,false).id(),b.version());return Map.of("message","已进入二级地图");}
+    @PostMapping("/scene/leave") public Object leaveScene(@RequestBody SceneCommand b,HttpServletRequest req){world.leaveScene(accounts.require(req,true,false).id(),b.version());return Map.of("message","已返回一级地图");}
+    @PostMapping("/scene/cross") public Object crossScene(@RequestBody SceneCommand b,HttpServletRequest req){if(b.direction()==null)throw AccountService.bad("请选择出口");world.crossScene(accounts.require(req,true,false).id(),b.direction(),b.version());return Map.of("message","已跨越边界");}
+    @PostMapping("/scene/move") public Object moveScene(@RequestBody SceneCommand b,HttpServletRequest req){if(b.q()==null||b.r()==null)throw AccountService.bad("请选择格子");return Map.of("path",world.moveScene(accounts.require(req,true,false).id(),b.q(),b.r(),b.version()));}
     record BattleStep(UUID battleId,Integer q,Integer r) {}
     record BattleAttack(UUID battleId,UUID targetId,Integer q,Integer r) {}
     record BattleTurn(UUID battleId) {}

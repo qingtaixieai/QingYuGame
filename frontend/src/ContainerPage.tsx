@@ -12,7 +12,7 @@ const kindName=(k:string)=>k==='corpse'?'尸体':k==='chest'?'宝箱':'掉落堆
 function remaining(expires:number|null,clock:number){if(expires===null)return '携带中 · 计时暂停';const s=Math.max(0,Math.ceil((expires-clock)/1000));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} 后消失`;}
 
 /** 单个容器的独立大页面：点尸体/宝箱/掉落堆 → 复用人物页模板展示。 */
-export function ContainerPage({version,battle,me,clock,connected,position,containerId,onClose,onChanged}:{version:string;battle:BattleState;me:string;clock:number;connected:boolean;position:Hex;containerId:string;onClose:()=>void;onChanged:()=>Promise<void>}){
+export function ContainerPage({version,battle,me,clock,connected,position,scenePosition,containerId,onClose,onChanged}:{version:string;battle:BattleState;me:string;clock:number;connected:boolean;position:Hex;scenePosition?:Hex|null;containerId:string;onClose:()=>void;onChanged:()=>Promise<void>}){
  const [container,setContainer]=useState<LootContainer|null>(null);
  const [contents,setContents]=useState<Item[]>([]);
  const [itemCode,setItemCode]=useState('');
@@ -22,7 +22,7 @@ export function ContainerPage({version,battle,me,clock,connected,position,contai
  const battleId=battle.active?battle.id:null,own=battle.active?battle.actors.find(a=>a.accountId===me):null;
  const query=`?version=${encodeURIComponent(version)}${battleId?'&battleId='+battleId:''}`;
  const selectedItem=contents.find(i=>i.code===itemCode)||contents[0];
- const sameCell=!!container&&(container.carrierId===me||(!battle.active?container.q===position.q&&container.r===position.r:container.battleQ===own?.q&&container.battleR===own?.r));
+ const sameCell=!!container&&(container.carrierId===me||(!battle.active?scenePosition?container.battleQ===scenePosition.q&&container.battleR===scenePosition.r:container.q===position.q&&container.r===position.r:container.battleQ===own?.q&&container.battleR===own?.r));
  const available=connected&&(!battle.active||battle.turnAccountId===me&&own?.character.life==='alive'&&battle.turnPoints>=2);
  const expired=container?.expiresAt!=null&&container.expiresAt<=clock;
  const canTake=available&&sameCell&&!expired&&!busy&&!loading;
@@ -30,7 +30,7 @@ export function ContainerPage({version,battle,me,clock,connected,position,contai
  useEffect(()=>{panel.current?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!pending.current){e.stopPropagation();onClose();}};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[]);
  useEffect(()=>{let alive=true;api<{ground:LootContainer[];carried:LootContainer[]}>('/loot'+query).then(d=>{if(!alive)return;const c=[...d.ground,...d.carried].find(x=>x.id===containerId)||null;setContainer(c);if(!c)setError('此处遗留物已被拿走或消失');}).catch(e=>{if(alive)setError(e.message);});return()=>{alive=false;};},[containerId,query]);
  useEffect(()=>{const req=++contentReq.current;setContents([]);setLoading(true);setQuantity(1);if(!container||!sameCell||expired){setLoading(false);return;}api<Item[]>('/loot/'+container.id+query).then(d=>{if(req===contentReq.current){setContents(d);setItemCode(old=>d.some(x=>x.code===old)?old:d[0]?.code||'');}}).catch(e=>{if(req===contentReq.current)setError(e.message);}).finally(()=>{if(req===contentReq.current)setLoading(false);});return()=>{contentReq.current++;};},[container,sameCell,expired,query]);
- async function act(action:string,code?:string,amount?:number){if(pending.current||!container)return;pending.current=true;setBusy(true);setError('');setNotice('');try{await api('/loot/action',{action,containerId:container.id,code,quantity:amount,version,battleId});setNotice(action==='carry'?'尸体与内部物品已装入背包':action==='dropCorpse'?'尸体已放回地上，重新计时30分钟':'物品已放入背包');await onChanged();const d=await api<{ground:LootContainer[];carried:LootContainer[]}>('/loot'+query);const updated=[...d.ground,...d.carried].find(x=>x.id===container.id);if(!updated){onClose();return;}setContainer(updated);setQuantity(1);}catch(e){setError((e as Error).message);}finally{pending.current=false;setBusy(false);}}
+ async function act(action:string,code?:string,amount?:number){if(pending.current||!container)return;pending.current=true;setBusy(true);setError('');setNotice('');try{await api('/loot/action',{action,containerId:container.id,code,quantity:amount,version,battleId});setNotice(action==='carry'?'尸体已装入背包，消失计时暂停':action==='dropCorpse'?'尸体已放回地上，按剩余时间继续计时':'物品已放入背包');await onChanged();const d=await api<{ground:LootContainer[];carried:LootContainer[]}>('/loot'+query);const updated=[...d.ground,...d.carried].find(x=>x.id===container.id);if(!updated){onClose();return;}setContainer(updated);setQuantity(1);}catch(e){setError((e as Error).message);}finally{pending.current=false;setBusy(false);}}
  return createPortal(<div className="container-overlay" onClick={e=>e.stopPropagation()}><section ref={panel} tabIndex={-1} className="container-page" role="dialog" aria-modal="true" aria-label="遗留物">
   <header className="container-head">
     <span className={'container-glyph kind-'+(container?.kind||'corpse')}>{container?.kind==='corpse'?<Skull size={30}/>:<Package size={30}/>}</span>
@@ -61,7 +61,7 @@ export function ContainerPage({version,battle,me,clock,connected,position,contai
     {container&&<div className="container-actions">
       <button className="pixel-btn" disabled={!canTake||!selectedItem||!Number.isInteger(quantity)||quantity<1||quantity>(selectedItem?.quantity||0)} onClick={()=>void act('take',selectedItem?.code,quantity)}>拿取所选{cost}</button>
       <button className="pixel-btn" disabled={!canTake||!contents.length} onClick={()=>void act('takeAll')}>全部拿取{cost}</button>
-      {container.kind==='corpse'&&(container.carrierId?<button className="pixel-btn pixel-btn--danger" disabled={!connected||busy||battle.active} onClick={()=>void act('dropCorpse')}>丢下尸体</button>:<button className="pixel-btn pixel-btn--primary" disabled={!canTake} onClick={()=>void act('carry')}>拿走尸体（含物品）{cost}</button>)}
+      {container.kind==='corpse'&&(container.carrierId?<button className="pixel-btn pixel-btn--danger" disabled={!connected||busy||battle.active} onClick={()=>void act('dropCorpse')}>丢下尸体</button>:<button className="pixel-btn pixel-btn--primary" disabled={!canTake||contents.length>0} title="请先取空尸体内部物品" onClick={()=>void act('carry')}>拿走空尸体{cost}</button>)}
     </div>}
   </footer>
  </section></div>,document.body);

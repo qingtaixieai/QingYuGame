@@ -5,6 +5,18 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.*;
 
 class WorldMapTest {
+    @Test void closedEdgeUsesAlternativeRouteAndBlocksBothDirectionsWithoutOne(){
+        var a=new WorldMap.Hex(0,0);var b=new WorldMap.Hex(1,0);var c=new WorldMap.Hex(0,1);
+        var tiles=new HashMap<WorldMap.Hex,WorldMap.Tile>();
+        for(var h:List.of(a,b,c))tiles.put(h,new WorldMap.Tile(h.q(),h.r(),"plains",false,null));
+        java.util.function.BiPredicate<WorldMap.Hex,WorldMap.Hex> open=(from,to)->
+            !(from.equals(a)&&to.equals(b)||from.equals(b)&&to.equals(a));
+        assertEquals(List.of(c,b),WorldMap.path(tiles,a,b,false,open));
+        assertEquals(List.of(c,a),WorldMap.path(tiles,b,a,false,open));
+        tiles.remove(c);
+        assertTrue(WorldMap.path(tiles,a,b,false,open).isEmpty());
+        assertTrue(WorldMap.path(tiles,b,a,false,open).isEmpty());
+    }
     @Test void generatedWorldsHaveConnectedSettlementsAndLegalRoutes(){
         for(long seed=0;seed<100;seed++){
             WorldMap world=WorldMap.generate(seed);var tiles=world.index();
