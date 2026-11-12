@@ -19,6 +19,44 @@ class SceneIntegrationTest {
  @DynamicPropertySource static void config(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("PHASE1_DATABASE_URL"));r.add("spring.datasource.username",()->"worldgame");r.add("spring.datasource.password",()->Objects.requireNonNullElse(System.getenv("PHASE1_DATABASE_PASSWORD"),"local-only"));r.add("app.admin-password",()->"phase-one-local-test-only");r.add("app.secure-cookie",()->false);}
  @Autowired WorldService world;@Autowired SceneRuntime runtime;@Autowired SceneService scenes;@Autowired BattleService battles;@Autowired CharacterService characters;@Autowired JdbcTemplate db;@Autowired PlatformTransactionManager manager;@Autowired LootService loot;
  private TransactionTemplate tx(){return new TransactionTemplate(manager);}
+ @Test void roundAdvancesWhenLegacyInitiativesOverlapTheOldParkingRange(){synchronized(world){
+  var owner=land();var first=actor(owner);var second=actor(owner);
+  var battle=world.startBattle(first,second,world.map().version());
+  db.update("update battle_actors set initiative=10001 where encounter_id=? and account_id=?",battle,second);
+  db.update("update battle_actors set initiative=1 where encounter_id=? and account_id=?",battle,first);
+  db.update("update battle_encounters set turn_account_id=? where id=?",second,battle);
+  world.battleEndTurn(second,battle);
+  assertEquals(2,db.queryForObject("select round_number from battle_encounters where id=?",Integer.class,battle));
+  assertEquals(List.of(0,1),db.queryForList("select initiative from battle_actors where encounter_id=? order by initiative",Integer.class,battle));
+ }}
+ @Test void enteringMarkedCellIsSafeAndLeavingConsumesIntentOnce(){synchronized(world){
+  var owner=land();var attacker=actor(owner);var target=actor(owner);var version=world.map().version();
+  world.enterScene(attacker,version);world.enterScene(target,version);
+  var scene=runtime.map(runtime.position(attacker).sceneId());
+  var start=new WorldMap.Hex(0,0);var marked=new WorldMap.Hex(1,0);var outside=new WorldMap.Hex(2,0);
+  var path=Set.of(start,marked,outside);
+  tx().executeWithoutResult(s->{
+   scenes.save(new SceneMap(scene.id(),version,scene.generationVersion(),2,owner,scene.name(),scene.radius(),
+       scene.cells().stream().map(cell->path.contains(cell.hex())?new SceneMap.Cell(cell.q(),cell.r(),"plain",true):cell).toList(),
+       scene.blockedEdges().stream().filter(e->!path.contains(e.from())||!path.contains(e.to())).toList()));
+   runtime.put(attacker,scene.id(),start);runtime.put(target,scene.id(),outside);
+  });
+  var battle=world.startBattle(attacker,target,version);
+  db.update("update battle_encounters set turn_account_id=?,turn_points=6 where id=?",attacker,battle);
+  world.battleAttack(attacker,battle,null,marked.q(),marked.r());
+  db.update("update battle_encounters set turn_account_id=?,turn_points=6 where id=?",target,battle);
+  int hp=characters.get(target).hp();
+  world.battleStep(target,battle,marked.q(),marked.r());
+  assertEquals(hp,characters.get(target).hp());
+  assertEquals(1,db.queryForObject("select count(*) from battle_intents where encounter_id=?",Integer.class,battle));
+  world.battleStep(target,battle,outside.q(),outside.r());
+  int after=characters.get(target).hp();
+  assertTrue(after<hp);
+  assertEquals(0,db.queryForObject("select count(*) from battle_intents where encounter_id=?",Integer.class,battle));
+  world.battleStep(target,battle,marked.q(),marked.r());
+  world.battleStep(target,battle,outside.q(),outside.r());
+  assertEquals(after,characters.get(target).hp());
+ }}
  @Test void enteringForeignOwnerOrWorldFailsBeforeChangingPosition(){synchronized(world){var owner=land();var a=actor(owner);var map=tx().execute(s->runtime.outdoor(world.map(),owner));var otherOwner=new WorldMap.Hex(owner.q()+1,owner.r());var foreignOwner=new SceneMap(map.id(),map.worldVersion(),map.generationVersion(),2,otherOwner,map.name(),map.radius(),map.cells());var foreignWorld=new SceneMap(map.id(),"old-world",map.generationVersion(),2,owner,map.name(),map.radius(),map.cells());assertThrows(RuntimeException.class,()->tx().execute(s->runtime.enter(a,foreignOwner,false,null)));assertThrows(RuntimeException.class,()->tx().execute(s->runtime.enter(a,foreignWorld,false,null)));assertNull(runtime.position(a));}}
  @Test void legacyEncounterWithoutSceneKeepsItsCoordinatesAndRadius(){synchronized(world){var owner=land();var a=actor(owner);var b=actor(owner);var id=UUID.randomUUID();db.update("insert into battle_encounters(id,world_version,world_q,world_r,turn_account_id,turn_deadline) values(?,?,?,?,?,?)",id,world.map().version(),owner.q(),owner.r(),a,System.currentTimeMillis()+45000);db.update("insert into battle_actors(encounter_id,account_id,q,r,initiative,entry_round) values(?,?,2,1,0,1),(?,?,-2,-1,1,1)",id,a,id,b);world.load();var current=(Map<?,?>)battles.current(a,Set.of(a,b));assertEquals(6,current.get("radius"));assertFalse(current.containsKey("sceneId"));assertEquals(2,db.queryForObject("select q from battle_actors where account_id=?",Integer.class,a));assertNull(runtime.position(a));}}
  @Test void forcedWithdrawalEntersOppositeEdgeAndBattleEndKeepsOtherPosition(){synchronized(world){
@@ -31,6 +69,29 @@ class SceneIntegrationTest {
  private WorldMap.Hex land(){return world.map().tiles().stream().filter(t->t.walkable()&&t.hex().neighbors().stream().anyMatch(h->{var v=world.map().index().get(h);return v!=null&&v.walkable();})).filter(t->characters.all().stream().noneMatch(c->c.npc()&&c.hex().equals(t.hex()))).findFirst().orElseThrow().hex();}
  private UUID actor(WorldMap.Hex owner){var a=world.register("scene_"+UUID.randomUUID().toString().substring(0,8),"phase-test-password");db.update("update accounts set approved=true,entered=true where id=?",a.id());characters.relocate(a.id(),owner.q(),owner.r());return a.id();}
  @Test void savedEntryMovementReturnAndRestartKeepPosition(){synchronized(world){var h=land();var id=actor(h);String v=world.map().version();world.enterScene(id,v);var p=runtime.position(id);var map=runtime.map(p.sceneId());assertEquals(15,map.radius());assertEquals(721,map.cells().size());assertFalse(SceneRuntime.sides(p.hex(),15).isEmpty());assertThrows(RuntimeException.class,()->world.move(id,h.q()+1,h.r(),v));var next=p.hex().neighbors().stream().filter(x->map.cells().stream().anyMatch(c->c.hex().equals(x))).findFirst().orElseThrow();world.moveScene(id,next.q(),next.r(),v);world.advance();assertEquals(next,runtime.position(id).hex());world.leaveScene(id,v);assertNull(runtime.position(id));world.enterScene(id,v);assertEquals(next,runtime.position(id).hex());String saved=db.queryForObject("select document from scene_documents where id=?",String.class,p.sceneId());world.load();assertEquals(next,runtime.position(id).hex());assertEquals(saved,db.queryForObject("select document from scene_documents where id=?",String.class,p.sceneId()));}}
+ @Test void unreachableRedirectPreservesRouteAndReachableRedirectReplacesIt(){synchronized(world){
+  var owner=land();
+  var id=actor(owner);
+  var version=world.map().version();
+  world.enterScene(id,version);
+  try{
+   var start=runtime.position(id).hex();
+   var map=runtime.map(runtime.position(id).sceneId());
+   var targets=start.neighbors().stream().filter(h->map.cells().stream().anyMatch(c->c.hex().equals(h)&&c.walkable())).toList();
+   assertTrue(targets.size()>=2);
+   var first=targets.getFirst();
+   var second=targets.get(1);
+   world.moveScene(id,first.q(),first.r(),version);
+   assertThrows(RuntimeException.class,()->world.moveScene(id,999,999,version));
+   assertEquals(true,world.snapshot(id).get("sceneMoving"));
+   world.advance();
+   assertEquals(first,runtime.position(id).hex());
+   world.moveScene(id,start.q(),start.r(),version);
+   var redirected=world.moveScene(id,second.q(),second.r(),version);
+   world.advance();
+   assertEquals(redirected.getFirst(),runtime.position(id).hex());
+  }finally{world.leaveScene(id,version);}
+ }}
  @Test void battlePreservesResidentsAndExcludesWorldBystanders(){synchronized(world){var h=land();String v=world.map().version();UUID a=actor(h),b=actor(h),resident=actor(h),bystander=actor(h);for(var id:List.of(a,b,resident))world.enterScene(id,v);var old=runtime.position(a);UUID battle=world.startBattle(a,b,v);assertTrue(battles.engaged(resident));assertFalse(battles.engaged(bystander));assertEquals(old.hex(),new WorldMap.Hex(db.queryForObject("select q from battle_actors where account_id=?",Integer.class,a),db.queryForObject("select r from battle_actors where account_id=?",Integer.class,a)));assertThrows(RuntimeException.class,()->world.leaveScene(a,v));assertThrows(RuntimeException.class,()->world.moveScene(a,0,0,v));world.joinBattle(bystander,battle,v);assertEquals(2,db.queryForObject("select entry_round from battle_actors where account_id=?",Integer.class,bystander));assertFalse(SceneRuntime.sides(runtime.position(bystander).hex(),15).isEmpty());}}
  @Test void worldAttackOnlyMovesThePairAndUsesInterior(){synchronized(world){var h=land();String v=world.map().version();UUID a=actor(h),b=actor(h),watcher=actor(h);world.startBattle(a,b,v);assertTrue(battles.engaged(a));assertTrue(battles.engaged(b));assertFalse(battles.engaged(watcher));assertNull(runtime.position(watcher));assertTrue(SceneRuntime.sides(runtime.position(a).hex(),15).isEmpty());}}
  @Test void crossRequiresEdgeAndPublicPassageAndOppositeEntry(){synchronized(world){var h=land();String v=world.map().version();var to=h.neighbors().stream().filter(x->{var t=world.map().index().get(x);return t!=null&&t.walkable();}).findFirst().orElseThrow();int direction=BattleService.DIRECTIONS.indexOf(new WorldMap.Hex(to.q()-h.q(),to.r()-h.r()));UUID a=actor(h);world.enterScene(a,v);var map=runtime.map(runtime.position(a).sceneId());tx().executeWithoutResult(s->runtime.put(a,map.id(),new WorldMap.Hex(0,0)));assertThrows(RuntimeException.class,()->world.crossScene(a,direction,v));var edge=SceneRuntime.edgeCell(map,direction,Set.of());tx().executeWithoutResult(s->runtime.put(a,map.id(),edge));var other=tx().execute(s->runtime.outdoor(world.map(),to));var portal=new ScenePortal(UUID.randomUUID(),new ScenePortal.Endpoint(map.id(),edge),new ScenePortal.Endpoint(other.id(),SceneRuntime.edgeCell(other,(direction+3)%6,Set.of())),false);tx().executeWithoutResult(s->scenes.save(portal));assertThrows(RuntimeException.class,()->world.crossScene(a,direction,v));assertEquals(map.id(),runtime.position(a).sceneId());tx().executeWithoutResult(s->scenes.save(new ScenePortal(portal.id(),portal.first(),portal.second(),true)));world.crossScene(a,direction,v);assertEquals(to,characters.get(a).hex());assertTrue(SceneRuntime.sides(runtime.position(a).hex(),other.radius()).contains((direction+3)%6));}}

@@ -1,7 +1,8 @@
+import type {Status} from './shared/status';
+export type {Status} from './shared/status';
 import {useEffect,useState} from 'react';
 import {api} from './api';
 import './statuses.css';
-export type Status={code:string;name:string;description:string;remaining:number;damage:number;sourceId:string|null};
 type Data={statuses:Status[];paused:boolean;selectedAmmo:string};
 export function StatusPanel({revision,compact=false,ammoOnly=false}:{revision:string|number;compact?:boolean;ammoOnly?:boolean}){
  const [data,setData]=useState<Data|null>(null),[expanded,setExpanded]=useState(false),[error,setError]=useState('');

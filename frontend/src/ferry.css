@@ -4,3 +4,18 @@
 
 .world-side-panels{position:absolute;right:24px;top:112px;z-index:3;width:282px;max-height:calc(100vh - 210px);overflow:auto;display:flex;flex-direction:column;gap:12px;padding:0 0 5px}.world-side-panels:empty{display:none}.world-side-panels .ferry-panel,.world-side-panels .world-battle-card{position:static;width:100%;max-width:none;max-height:none;flex-shrink:0}.game-shell .show-battle>.world-side-panels{display:none}
 @media(max-width:620px){.world-side-panels{right:8px;top:155px;width:230px;max-width:calc(100vw - var(--rail-width) - 22px);max-height:35vh}.game-shell.sidebar-open .world-side-panels{visibility:hidden}}
+
+/* Keep the same tool lane beside the contextual panel on every map. */
+@media(min-height:601px) and (min-width:621px){
+  .game-shell .map-surface:has(.world-side-panels:not(:empty)) .map-tools{right:316px}
+  .game-shell .map-surface:has(.world-side-panels:not(:empty)) .compass{right:316px}
+  .game-shell .map-surface:has(.world-side-panels:not(:empty)) > .combat-log{right:370px}
+}
+/* Landscape panels share the lower-right lane. Keep crafting below it. */
+@media(max-height:600px) and (orientation:landscape){
+  .game-shell .map-surface:has(.world-side-panels:not(:empty)) > .production-launch{
+    left:auto;
+    right:158px;
+    bottom:8px;
+  }
+}

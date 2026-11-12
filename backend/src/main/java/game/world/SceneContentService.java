@@ -28,7 +28,7 @@ public class SceneContentService {
  }
  private SceneMap.Cell take(List<SceneMap.Cell> cells){return cells.isEmpty()?null:cells.removeFirst();}
  private void insert(SceneMap map,SceneMap.Cell h,String kind,String code,String name,int capacity,int duration,int respawn,String tool){UUID id=UUID.nameUUIDFromBytes((map.id()+":"+code+":"+h.q()+":"+h.r()).getBytes(StandardCharsets.UTF_8));db.update("insert into scene_objects(id,scene_id,kind,code,name,q,r,capacity,duration_ms,respawn_ms,tool) values(?,?,?,?,?,?,?,?,?,?,?)",id,map.id(),kind,code,name,h.q(),h.r(),capacity,duration,respawn,tool);}
- public List<ObjectView> objects(UUID scene,long now){return db.query("select o.*,exists(select 1 from production_tasks t where t.object_id=o.id) as in_use from scene_objects o where scene_id=? order by q,r",(r,n)->new ObjectView(r.getObject("id",UUID.class),r.getString("kind"),r.getString("code"),r.getString("name"),r.getInt("q"),r.getInt("r"),r.getLong("ready_at")>now,r.getBoolean("in_use")),scene);}
+ public List<ObjectView> objects(UUID scene,long now){return db.query("select o.*,exists(select 1 from production_tasks t where t.object_id=o.id) as in_use from scene_objects o where scene_id=? order by q,r,id",(r,n)->new ObjectView(r.getObject("id",UUID.class),r.getString("kind"),r.getString("code"),r.getString("name"),r.getInt("q"),r.getInt("r"),r.getLong("ready_at")>now,r.getBoolean("in_use")),scene);}
  public boolean refreshStones(long now){
   boolean changed=false;var json=tools.jackson.databind.json.JsonMapper.builder().build();
   for(var row:db.queryForList("select o.id,o.scene_id,d.document from scene_objects o join scene_documents d on d.id=o.scene_id where o.code='stone' and o.ready_at>0 and o.ready_at<=?",now)){

@@ -42,6 +42,7 @@ public class ShopService {
         for(var line:order.lines()){
             if(line==null||line.quantity()<1||line.quantity()>10000)throw AccountService.bad("数量须为1至10000");
             if(line.corpseId()!=null){
+                if(db.queryForObject("select exists(select 1 from handover_corpses where corpse_id=?)",Boolean.class,line.corpseId()))throw AccountService.bad("尸体已预留给交接，请先取消");
                 if(buy||line.quantity()!=1||!seen.add("corpse:"+line.corpseId()))throw AccountService.bad("尸体必须独立出售");
                 if(db.queryForObject("select exists(select 1 from production_tasks where corpse_id=?)",Boolean.class,line.corpseId()))throw AccountService.bad("尸体正在剥皮，请先取消");
                 var c=corpses(actor).stream().filter(x->line.corpseId().equals(x.get("id"))).findFirst().orElseThrow(()->AccountService.bad("尸体不在背包中"));
@@ -60,8 +61,9 @@ public class ShopService {
             }
         }
         var coins=coins(actor);
-        if(buy){var change=CoinPayment.pay(coins.get("copper_coin"),coins.get("silver_coin"),coins.get("gold_coin"),total);setCoin(actor,"copper_coin",change.copper());setCoin(actor,"silver_coin",change.silver());setCoin(actor,"gold_coin",change.gold());}
-        else setCoin(actor,"copper_coin",Math.addExact(coins.get("copper_coin"),total));
+        boolean npc=db.queryForObject("select kind<>'player' from characters where id=?",Boolean.class,actor);
+        if(buy&&!npc){var change=CoinPayment.pay(coins.get("copper_coin"),coins.get("silver_coin"),coins.get("gold_coin"),total);setCoin(actor,"copper_coin",change.copper());setCoin(actor,"silver_coin",change.silver());setCoin(actor,"gold_coin",change.gold());}
+        else if(!buy)setCoin(actor,"copper_coin",Math.addExact(coins.get("copper_coin"),total));
         Object result=Map.of("total",total,"coins",coins(actor),"message",buy?"购买完成":"出售完成");
         db.update("insert into transaction_receipts values(?,?,'shop',?,?,?)",actor,order.requestId(),payload(order),json.writeValueAsString(result),System.currentTimeMillis());return result;
     }

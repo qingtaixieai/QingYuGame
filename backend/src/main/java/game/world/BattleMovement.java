@@ -18,7 +18,7 @@ final class BattleMovement {
         while(!queue.isEmpty()){
             var cell=queue.remove();
             for(var next:cell.neighbors()){
-                if(distance(next)>radius||occupied.contains(next)||previous.containsKey(next)||walls.contains(new SceneMap.Edge(cell,next)))continue;
+                if(previous.containsKey(next)||!canStep(radius,cell,next,occupied,walls))continue;
                 previous.put(next,cell);
                 if(next.equals(to)){
                     var route=new LinkedList<WorldMap.Hex>();
@@ -29,6 +29,9 @@ final class BattleMovement {
             }
         }
         return List.of();
+    }
+    static boolean canStep(int radius,WorldMap.Hex from,WorldMap.Hex next,Set<WorldMap.Hex> occupied,Set<SceneMap.Edge> walls){
+        return distance(next)<=radius&&!occupied.contains(next)&&!walls.contains(new SceneMap.Edge(from,next));
     }
     private static int distance(WorldMap.Hex h){return WorldMap.distance(new WorldMap.Hex(0,0),h);}
 }

@@ -26,6 +26,14 @@ public record WorldMap(String version, long seed, String name, int radius, Hex s
     static List<Hex> path(Map<Hex,Tile> tiles, Hex from, Hex to, boolean buildRoad,
                           java.util.function.BiPredicate<Hex,Hex> edgeOpen) {
         if (!tiles.containsKey(to) || (!buildRoad && !tiles.get(to).walkable())) return List.of();
+        return shortestPath(from,to,(a,b)->{
+            Tile tile=tiles.get(b);
+            if(tile==null||tile.terrain.equals("ocean")||(!buildRoad&&!tile.walkable())||!edgeOpen.test(a,b))return 0;
+            return buildRoad?(tile.terrain.equals("mountain")?15:tile.terrain.equals("river")?5:1):1;
+        });
+    }
+
+    static List<Hex> shortestPath(Hex from,Hex to,java.util.function.ToIntBiFunction<Hex,Hex> edgeCost){
         Map<Hex,Hex> previous = new HashMap<>();
         Map<Hex,Integer> cost = new HashMap<>();
         record Step(Hex h, int cost) {}
@@ -37,10 +45,9 @@ public record WorldMap(String version, long seed, String name, int radius, Hex s
             if (s.cost != cost.get(s.h)) continue;
             if (s.h.equals(to)) break;
             for (Hex n : s.h.neighbors()) {
-                if(!edgeOpen.test(s.h,n))continue;
-                Tile t=tiles.get(n);
-                if (t==null || t.terrain.equals("ocean") || (!buildRoad && !t.walkable())) continue;
-                int next=s.cost+(buildRoad ? (t.terrain.equals("mountain") ? 15 : t.terrain.equals("river") ? 5 : 1) : 1);
+                int stepCost=edgeCost.applyAsInt(s.h,n);
+                if(stepCost<=0)continue;
+                int next=s.cost+stepCost;
                 if (next < cost.getOrDefault(n,Integer.MAX_VALUE)) {
                     cost.put(n,next); previous.put(n,s.h); todo.add(new Step(n,next));
                 }
@@ -149,30 +156,5 @@ public record WorldMap(String version, long seed, String name, int radius, Hex s
             for(Hex n:h.neighbors())if(map.containsKey(n)&&map.get(n).terrain.equals("ocean")&&!previous.containsKey(n)){previous.put(n,h);queue.add(n);}
         }
         throw new IllegalStateException("No ocean route between ferry docks");
-    }
-    static List<Hex> shortestPath(Hex from,Hex to,java.util.function.ToIntBiFunction<Hex,Hex> edgeCost){
-        Map<Hex,Hex> previous = new HashMap<>();
-        Map<Hex,Integer> cost = new HashMap<>();
-        record Step(Hex h, int cost) {}
-        PriorityQueue<Step> todo = new PriorityQueue<>(Comparator.comparingInt(Step::cost)
-            .thenComparingInt(s -> s.h.q).thenComparingInt(s -> s.h.r));
-        todo.add(new Step(from,0)); cost.put(from,0);
-        while (!todo.isEmpty()) {
-            Step s = todo.poll();
-            if (s.cost != cost.get(s.h)) continue;
-            if (s.h.equals(to)) break;
-            for (Hex n : s.h.neighbors()) {
-                int stepCost=edgeCost.applyAsInt(s.h,n);
-                if(stepCost<=0)continue;
-                int next=s.cost+stepCost;
-                if (next < cost.getOrDefault(n,Integer.MAX_VALUE)) {
-                    cost.put(n,next); previous.put(n,s.h); todo.add(new Step(n,next));
-                }
-            }
-        }
-        if (!cost.containsKey(to)) return List.of();
-        LinkedList<Hex> result=new LinkedList<>();
-        for (Hex h=to; !h.equals(from); h=previous.get(h)) result.addFirst(h);
-        return result;
     }
 }

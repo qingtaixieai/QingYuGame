@@ -1,0 +1,71 @@
+import importlib.util
+import tempfile
+import unittest
+from pathlib import Path
+
+
+class EngineeringCheckTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('engineering_check', Path(__file__).with_name('engineering_check.py'))
+        cls.check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.check)
+
+    def test_routes_include_prefix_and_detect_duplicates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'A.java').write_text('@RestController\n@RequestMapping("/api")\nclass A { @GetMapping("/x") public Object x(){} }')
+            (root / 'B.java').write_text('@RestController\n@RequestMapping("/api")\nclass B { @GetMapping("/x") public Object x(){} @PostMapping("/y") public Object y(){} }')
+            routes, errors = self.check.scan_routes(root)
+            self.assertEqual(set(routes), {'GET /api/x', 'POST /api/y'})
+            self.assertTrue(any('duplicate' in e for e in errors))
+
+    def test_contract_missing_and_added_are_both_errors(self):
+        errors = self.check.compare_routes({'GET /api/new'}, {'GET /api/old'})
+        self.assertEqual(len(errors), 2)
+
+    def test_owner_requires_exactly_one_match(self):
+        manifest = {'world': ['src/World*'], 'combat': ['src/Battle*']}
+        self.assertEqual(self.check.owners('src/WorldMap.java', manifest), ['world'])
+        self.assertEqual(self.check.owners('src/New.java', manifest), [])
+        manifest['integration'] = ['src/*']
+        self.assertEqual(len(self.check.owners('src/WorldMap.java', manifest)), 2)
+
+    def test_links_ignore_web_but_report_missing_local(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            page = root / 'entry.md'
+            page.write_text('[ok](https://example.com) [missing](missing.md) [anchor](#part)')
+            self.assertEqual(len(self.check.check_links(page)), 1)
+
+    def test_shared_protocol_cannot_depend_on_ui_and_feature_cannot_depend_on_app(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'shared').mkdir()
+            (root / 'features').mkdir()
+            (root / 'app').mkdir()
+            (root / 'shared/protocol.ts').write_text("import type {State} from '../Panel';")
+            (root / 'Panel.tsx').write_text('export type State = {};')
+            (root / 'features/Game.tsx').write_text("import {App} from '../app/App';")
+            (root / 'app/App.tsx').write_text('export function App(){}')
+            self.assertEqual(len(self.check.check_frontend_layers(root)), 2)
+            (root / 'shared/protocol.ts').write_text('export type State = {};')
+            (root / 'features/Game.tsx').write_text("import type {State} from '../shared/protocol';")
+            self.assertEqual(self.check.check_frontend_layers(root), [])
+
+    def test_design_preview_is_isolated_in_both_directions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'design-preview').mkdir()
+            (root / 'app').mkdir()
+            (root / 'design-preview/main.tsx').write_text("import {api} from '../api';")
+            (root / 'api.ts').write_text('export const api = {};')
+            (root / 'app/App.tsx').write_text("import {Demo} from '../design-preview/Demo';")
+            self.assertEqual(len(self.check.check_frontend_layers(root)), 2)
+            (root / 'design-preview/main.tsx').write_text("import {Demo} from './Demo';")
+            (root / 'app/App.tsx').write_text("import {api} from '../api';")
+            self.assertEqual(self.check.check_frontend_layers(root), [])
+
+
+if __name__ == '__main__':
+    unittest.main()

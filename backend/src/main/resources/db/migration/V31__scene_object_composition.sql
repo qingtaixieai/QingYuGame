@@ -1,0 +1,1 @@
+ALTER TABLE scene_objects DROP CONSTRAINT scene_objects_scene_id_q_r_key;

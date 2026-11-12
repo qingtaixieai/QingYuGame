@@ -1,0 +1,1 @@
+ALTER TABLE handover_corpses ADD COLUMN price BIGINT NOT NULL DEFAULT 0 CHECK(price>=0);

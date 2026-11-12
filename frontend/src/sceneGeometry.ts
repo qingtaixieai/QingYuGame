@@ -1,9 +1,20 @@
+import type {SceneCell} from './shared/scene';
+export type {SceneCell} from './shared/scene';
 import type {BlockedEdge,Hex} from './types';
-export type SceneCell=Hex&{terrain:string;walkable:boolean};
 export const sceneKey=(h:Hex)=>`${h.q},${h.r}`;
 export const edgeKey=(a:Hex,b:Hex)=>[sceneKey(a),sceneKey(b)].sort().join("|");
 export const sceneXY=(h:Hex)=>({x:54*h.q,y:Math.sqrt(3)*36*(h.r+h.q/2)});
 export const scenePolygon=(h:Hex)=>{const p=sceneXY(h);return Array.from({length:6},(_,i)=>`${p.x+35*Math.cos(i*Math.PI/3)},${p.y+35*Math.sin(i*Math.PI/3)}`).join(' ');};
+/** Exact rendered flat-top hex, including rejection of gaps and off-map taps. */
+export function sceneHitTest(cells:SceneCell[],point:{x:number;y:number}):SceneCell|undefined{
+ const qf=point.x/54,rf=point.y/(Math.sqrt(3)*36)-qf/2;
+ let q=Math.round(qf),r=Math.round(rf),s=Math.round(-qf-rf);
+ const dq=Math.abs(q-qf),dr=Math.abs(r-rf),ds=Math.abs(s+qf+rf);
+ if(dq>dr&&dq>ds)q=-r-s;else if(dr>ds)r=-q-s;
+ const cell=cells.find(c=>c.q===q&&c.r===r);if(!cell)return;
+ const p=sceneXY(cell),dx=Math.abs(point.x-p.x),dy=Math.abs(point.y-p.y),root=Math.sqrt(3);
+ return dx<=35&&dy<=35*root/2&&root*dx+dy<=35*root?cell:undefined;
+}
 export const sceneSides=(h:Hex,r:number)=>[h.q,h.q+h.r,h.r,-h.q,-h.q-h.r,-h.r].flatMap((v,i)=>v===r?[i]:[]);
 export const groundColor=(terrain:string)=>({floor:'#d7c7a3',wall:'#77715f',furniture:'#a48c69',grass:'#b9cc8b',dirt:'#b5a27e',sand:'#dfce94',rock:'#a1aaa0',paving:'#bcb8a3',shallow:'#97c7c3',deep:'#659ba9',forest:'#b9cc8b',plain:'#b9cc8b'}[terrain]||'#b9cc8b');
 export function scenePath(cells:SceneCell[],from:Hex,to:Hex,occupied:Set<string>,edges:BlockedEdge[]=[]):Hex[]{

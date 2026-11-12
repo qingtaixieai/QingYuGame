@@ -1,6 +1,7 @@
 import {Graphics,type Container} from 'pixi.js';
-import {cellKey,hexShape,sceneLabel,scenePoint} from './SceneCanvas';
+import {cellKey,hexShape,sceneActor,sceneLabel,scenePoint} from './SceneCanvas';
 import {localActor,localMarker,localRoute,localTerrain,type LocalCell} from './localSceneArt';
+import {drawWorldActor} from './worldArt';
 import type {BattleState,Hex,LootContainer} from './types';
 
 type Battle=Extract<BattleState,{active:true}>;
@@ -32,33 +33,74 @@ export function drawBattleGround(layer:Container,battle:Battle,cells:LocalCell[]
     sceneLabel(layer,edge.destination,x,y+9,9);
   }
 }
-export function drawBattleOverlay(layer:Container,{battle,marks,route,own,selected,visual,loot,me,moving,clock}:{
-  battle:Battle;marks:Mark[];route?:Hex[]|null;own?:Hex;selected:Hex|null;visual:Record<string,Hex>;
-  loot:LootContainer[];me:string;moving:boolean;clock:number;
+export function drawSharedWithdrawal(layer:Container,battle:Battle,cells:LocalCell[],exitSides:(h:Hex)=>number[]){
+  const outlines=layer.addChild(new Graphics());
+  for(const edge of battle.edges){
+    const door=edge.cell;
+    const exits=door?cells.filter(cell=>matches(door,cell))
+      :cells.filter(cell=>cell.walkable&&exitSides(cell).includes(edge.direction));
+    if(!exits.length)continue;
+    const color=edge.walkable?0xf3d48d:0xb78c80;
+    for(const cell of exits)hexShape(outlines,cell,31).stroke({color,width:door?3:2,alpha:edge.walkable?.92:.6});
+    const midpoint=exits.reduce((closest,cell)=>distanceSquaredFromCenter(cell)<distanceSquaredFromCenter(closest)?cell:closest);
+    const {x,y}=scenePoint(midpoint);
+    const exitName=door?'门':`${arrows[edge.direction]??''} ${edge.name}`;
+    const status=edge.walkable?'可撤离':'不可通行';
+    sceneLabel(layer,`${exitName} · ${status}`,x,y+(door?21:0),14,edge.walkable?'#544420':'#78453c');
+  }
+}
+function distanceSquaredFromCenter(cell:Hex){
+  const {x,y}=scenePoint(cell);
+  return x*x+y*y;
+}
+export function drawBattleHighlights(layer:Container,{intents,marks,route,own,selected}:{
+  intents:Battle['intents'];marks:Mark[];route?:Hex[]|null;own?:Hex;selected:Hex|null;
 }){
   const g=new Graphics();layer.addChild(g);
   for(const {cell,color,alpha,width=2} of marks)hexShape(g,cell,32).fill({color,alpha}).stroke({color,alpha:Math.min(1,alpha+.44),width});
   if(route&&own)localRoute(g,own,route);
-  if(selected)hexShape(g,selected,33).stroke({color:0x465943,width:4}).stroke({color:0xffefb9,width:2});
+  if(selected){
+    const onIntent=intents.some(intent=>intent.cells.some(cell=>matches(cell,selected)));
+    hexShape(g,selected,onIntent?26:33).stroke({color:0x465943,width:4}).stroke({color:0xffefb9,width:2});
+  }
+}
+export function drawBattleOverlay(layer:Container,{actors,relations,visual,loot,me,moving,shared}:{
+  actors:Battle['actors'];relations:Battle['relations'];visual:Record<string,Hex>;
+  loot:LootContainer[];me:string;moving:boolean;shared:boolean;
+}){
+  const g=new Graphics();layer.addChild(g);
   for(const item of loot){
     if(item.battleQ==null||item.battleR==null)continue;
     const cell={q:item.battleQ,r:item.battleR},{x,y}=scenePoint(cell);
-    localMarker(g,cell,item.kind);
+    if(!shared)localMarker(g,cell,item.kind);
     sceneLabel(layer,item.kind==='corpse'?'尸体':item.kind==='chest'?'宝箱':'遗留物',x,y+21,10);
   }
-  const actors=[...battle.actors].sort((a,b)=>scenePoint(visual[a.accountId]??a).y-scenePoint(visual[b.accountId]??b).y);
-  for(const actor of actors){
-    const h=visual[actor.accountId]??actor,{x,y}=scenePoint(h),c=actor.character,down=c.life==='down';
-    if(moving&&actor.accountId===me)g.ellipse(x,y+13,21,9).stroke({color:0xfff1aa,width:3});
-    localActor(g,h,actor.color,c.kind==='monster',down);
+  const ordered=[...actors].sort((a,b)=>scenePoint(visual[a.accountId]??a).y-scenePoint(visual[b.accountId]??b).y);
+  for(const actor of ordered){
+    const h=visual[actor.accountId]??actor,c=actor.character,down=c.life==='down';
+    const actorLayer=shared?sceneActor(layer,actor.accountId,h):layer;
+    const art=shared?actorLayer.addChild(new Graphics()):g;
+    const {x,y}=shared?{x:0,y:0}:scenePoint(h);
+    if(moving&&actor.accountId===me)art.ellipse(x,y+13,21,9).stroke({color:0xfff1aa,width:3});
+    if(shared){
+      const sprite=actorLayer.addChild(new Graphics());
+      drawWorldActor(sprite,{color:actor.color,online:actor.online,kind:c.kind,species:c.species},actor.accountId===me);
+      sprite.scale.set(1.25);
+      if(down)sprite.rotation=Math.PI/2;
+    }else localActor(g,h,actor.color,c.kind==='monster',down);
     const hp=down?c.downHp:c.hp,max=down?c.maxDownHp:c.maxHp;
-    g.roundRect(x-21,y-37,42,6,2).fill(0x4b5042);
-    if(max>0&&hp>0)g.roundRect(x-21,y-37,42*Math.min(1,hp/max),6,2).fill(down?0xbb7755:0x75a85e);
-    sceneLabel(layer,`${actor.username}${actor.accountId===me?' · 你':''}`,x,y-57,12);
-    sceneLabel(layer,`${down?'倒地 ':''}${hp}/${max}`,x,y-45,10);
-    if(actor.withdrawDirection!=null||!actor.online)sceneLabel(layer,actor.withdrawDirection!=null?'正在撤离…':'离线',x,y+27,10, '#765442');
+    art.roundRect(x-21,y-37,42,6,2).fill(0x4b5042);
+    const relation=actor.accountId===me?'ally':relations?.[actor.accountId]??'neutral';
+    const healthColor={hostile:0xe45b4e,neutral:0xe9c64a,ally:0x68ae64}[relation];
+    if(max>0&&hp>0)art.roundRect(x-21,y-37,42*Math.min(1,hp/max),6,2).fill(healthColor);
+    sceneLabel(actorLayer,`${actor.username}${actor.accountId===me?' · 你':''}`,x,y-57,12);
+    sceneLabel(actorLayer,`${down?'倒地 ':''}${hp}/${max}`,x,y-45,10);
+    if(actor.withdrawDirection!=null||!actor.online)sceneLabel(actorLayer,actor.withdrawDirection!=null?'正在撤离…':'离线',x,y+27,10, '#765442');
   }
-  for(const e of battle.events){
+}
+export function drawBattleEffects(layer:Container,events:Battle['events'],clock:number){
+  const g=new Graphics();layer.addChild(g);
+  for(const e of events){
     const age=clock-e.happenedAt;
     if(e.amount==null||e.q==null||e.r==null||age<0||age>1700)continue;
     const {x,y}=scenePoint({q:e.q,r:e.r}),heal=e.kind==='potion'||e.kind==='bandage';

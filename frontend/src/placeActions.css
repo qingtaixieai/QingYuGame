@@ -1,0 +1,50 @@
+.place-actions {
+  position:absolute; z-index:7; right:max(78px,calc(env(safe-area-inset-right,0px) + 54px));
+  bottom:80px; width:min(330px,calc(100% - var(--scene-ui-left,66px) - 24px));
+  max-height:45vh; overflow:auto; padding:12px; border:1px solid #c1c9af;
+  border-radius:10px; background:#faf8eafa; color:#304936;
+  box-shadow:0 8px 24px #30493628;
+}
+.place-actions header { display:flex; align-items:center; gap:4px; }
+.place-actions header>div { flex:1; min-width:0; }
+.place-actions h3 { margin:0; font-size:16px; }
+.place-actions p { margin:4px 0; font-size:13px; line-height:1.35; }
+.place-actions header>button { flex:none; display:grid; place-items:center; border:0; background:transparent; color:inherit; width:34px; height:34px; }
+.place-actions-detail { margin:6px 0; }
+.place-actions-buttons { display:flex; flex-wrap:wrap; align-items:start; gap:6px; margin-top:6px; }
+.place-actions-buttons button { min-height:36px; }
+.place-actions-primary { flex:1; }
+.place-actions-primary>button { width:100%; }
+.place-actions-secondary { display:flex; flex-wrap:wrap; gap:4px; }
+.place-actions-secondary details { position:relative; }
+.place-actions-secondary summary { display:grid; align-items:center; min-height:36px; cursor:pointer; }
+.place-actions-secondary details[open]>div { display:grid; gap:4px; padding-top:4px; }
+.place-actions .place-secondary { border:1px solid #b5c0a2; border-radius:6px; padding:5px 9px; background:#f3f3e3; color:#314936; }
+.place-actions button:disabled { opacity:.6; }
+.place-actions-world .world-place-occupant { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:4px 0; font-size:13px; }
+.place-actions-world .ferry-details button:disabled { cursor:not-allowed; }
+.game-shell .map-surface:has(>.place-actions-world)>.soul-panel { top:120px; bottom:auto; right:76px; }
+.game-shell:has(.place-actions) .production-launch { bottom:40px; }
+@media(max-height:600px) and (orientation:landscape) {
+  .place-actions {
+    right:max(66px,calc(env(safe-area-inset-right,0px) + 54px)); bottom:max(8px,env(safe-area-inset-bottom,0px));
+    width:auto; left:calc(var(--scene-ui-left,42px) + 12px); max-height:42vh; padding:5px 8px;
+    display:grid; grid-template-columns:minmax(100px,1fr) auto; column-gap:12px; align-items:center;
+  }
+  .place-actions h3 { font-size:14px; }
+  .place-actions p { font-size:12px; }
+  .place-actions-detail { grid-column:1; grid-row:2; margin:0; }
+  .place-actions-buttons { grid-column:2; grid-row:1 / span 2; margin:0; justify-content:flex-end; }
+  .place-actions-buttons button,.place-actions-secondary summary,.place-actions header>button { min-height:44px; min-width:44px; }
+  .game-shell:has(.place-actions) .production-launch { bottom:calc(57px + env(safe-area-inset-bottom,0px)); right:8px; width:44px; min-height:44px; line-height:1.15; padding:3px; }
+  .game-shell:has(.place-actions) .emote-control { bottom:max(8px,env(safe-area-inset-bottom,0px)); }
+  .game-shell .map-surface:has(>.place-actions-world)>.map-bottom { bottom:auto; top:calc(var(--top-height,0px) + 8px); left:52px; right:auto; }
+  .game-shell .map-surface:has(>.place-actions-world)>.soul-panel { top:calc(var(--top-height,0px) + 8px); right:58px; max-height:32vh; }
+  .place-actions-world .ferry-material button { min-height:44px; }
+}
+
+.place-components {display:flex; flex-wrap:wrap; gap:5px; margin:5px 0}
+.place-components button[aria-pressed=true] {background:#315645;color:#fff6dd;border-color:#315645}
+@media(max-height:600px) and (orientation:landscape) {
+  .place-components button {min-height:44px}
+}

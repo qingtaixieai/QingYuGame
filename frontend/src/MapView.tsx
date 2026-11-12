@@ -5,42 +5,17 @@ import { Application, Container, Graphics, Text } from 'pixi.js';
 // Pixi's official non-eval polyfills keep WebGL rendering compatible with production CSP.
 import 'pixi.js/unsafe-eval';
 import type { Hex, Player, Tile, World, ResourceNode, WorldAction, Emote, BattleSummary, FerryState } from './types';
-import {emoteArt,emotePalette} from './emotes';
+import {hitInteraction,paintInteractionPins,type ArrangedInteraction} from './cellInteractions';
+import {drawEmoteBubble} from './emotes';
 import { key } from './types';
+import {drawHouse,drawRuin,drawTerrainProp,drawWorldActor,drawWorldGround,drawWorldFerry,hex,pixel,tree} from './worldArt';
+import {paintRoad} from './mapPaint';
 import {advanceRenderClock,ferryRouteProgress} from './ferryMotion';
 
 const SIZE=25, SQRT3=Math.sqrt(3);
 export const position=(h:Hex)=>({x:SQRT3*SIZE*(h.q+h.r/2),y:1.5*SIZE*h.r});
-const colors:Record<string,number>={ocean:0xa5cdd0,plain:0xb8cf8b,forest:0x9fbe7c,hill:0xb6c18b,mountain:0xa8b7a0,beach:0xded7a1,river:0x86bfc7,bridge:0x86bfc7};
-function hex(g:Graphics,x:number,y:number,r:number){return g.poly(Array.from({length:6},(_,i)=>{const a=Math.PI/180*(60*i-30);return [x+r*Math.cos(a),y+r*Math.sin(a)]}).flat());}
-function pixel(g:Graphics,x:number,y:number,w:number,h:number,c:number){g.rect(Math.round(x),Math.round(y),w,h).fill(c);}
-function tree(g:Graphics,x:number,y:number,variant:number){
-  g.ellipse(x,y+9,10,4).fill({color:0x53694f,alpha:.17});pixel(g,x-2,y,4,10,0x7c7853);
-  const c=variant?0x739568:0x5a8866;
-  pixel(g,x-7,y-12,14,17,0x52795c);pixel(g,x-10,y-7,20,9,c);pixel(g,x-6,y-16,12,18,c);
-  pixel(g,x-3,y-18,7,5,variant?0x9bb478:0x82a275);pixel(g,x-7,y-8,5,7,variant?0x9bb478:0x82a275);
-}
-function mountain(g:Graphics,x:number,y:number){
-  const steps=[[-17,7,34,7],[-14,0,28,8],[-10,-8,20,9],[-7,-15,14,8],[-3,-22,6,8]];
-  for(const [dx,dy,w,h] of steps)pixel(g,x+dx,y+dy,w,h,0x7e8c83);
-  for(const [dx,dy,w,h] of steps.slice(1))pixel(g,x+dx,y+dy,Math.ceil(w/2),h,0xa1aaa0);
-  pixel(g,x-3,y-22,6,8,0xe9ead6);pixel(g,x-7,y-15,14,4,0xe9ead6);pixel(g,x-7,y-11,5,3,0xe9ead6);
-}
-function house(g:Graphics,x:number,y:number,big:boolean){
-  g.ellipse(x,y+10,big?18:13,5).fill({color:0x59694f,alpha:.2});
-  pixel(g,x-11,y-4,22,15,0x8e7355);pixel(g,x-9,y-5,18,14,0xf4e8bc);
-  pixel(g,x-4,y+2,6,9,0x685d47);pixel(g,x+5,y-1,3,4,0x769396);pixel(g,x-8,y-1,3,4,0x769396);
-  pixel(g,x-15,y-8,30,4,0x795342);pixel(g,x-12,y-12,24,5,0xb87550);pixel(g,x-9,y-16,18,5,0xcc9160);pixel(g,x-5,y-19,10,4,0xddad76);
-  pixel(g,x+6,y-22,4,9,0x8e7355);
-  if(big){pixel(g,x-20,y-6,7,19,0x9c9e88);pixel(g,x+14,y-6,7,19,0x9c9e88);pixel(g,x-21,y-9,9,4,0xd5d5b3);pixel(g,x+13,y-9,9,4,0xd5d5b3);}
-}
-function ruin(g:Graphics,x:number,y:number){
-  g.ellipse(x,y+8,17,6).fill({color:0x637151,alpha:.2});
-  for(const [dx,dy,h] of [[-11,-10,19],[7,-15,24],[-2,2,7]]){pixel(g,x+dx,y+dy,6,h,0x8f9b8b);pixel(g,x+dx,y+dy,3,h,0xc6c9ac);pixel(g,x+dx-1,y+dy-2,8,3,0xd8d7b5);}
-  pixel(g,x-12,y+8,10,3,0x7d9b61);pixel(g,x+3,y+5,6,4,0x7d9b61);
-}
 export type MapControls={zoom:(factor:number)=>void;fit:()=>void;locate:(h:Hex)=>void};
-type Props={blockedEdges?:BlockedEdge[];loot:LootContainer[];deathMark:Hex|null;active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];onSelect:(tile:Tile)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
+type Props={blockedEdges?:BlockedEdge[];loot:LootContainer[];deathMark:Hex|null;active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];interactions:ArrangedInteraction[]; activeComponent:string|null; onSelect:(tile:Tile,componentId?:string)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
 export const MapView=memo(function MapView(props:Props){
   const host=useRef<HTMLDivElement>(null), latest=useRef(props), application=useRef<Application|null>(null);
   latest.current=props;
@@ -58,17 +33,17 @@ export const MapView=memo(function MapView(props:Props){
       scene.addChild(ground,roads,decor,resourceLayer,markers,battleMarks,routeLine,selection,actors,effects);
       const passageMarks=new Graphics();scene.addChild(passageMarks);let passageSignature='';
       const lootLayer=new Container();scene.addChild(lootLayer);let lootSignature='';
+      const interactionLayer=new Container();scene.addChild(interactionLayer);
+      let previousInteractions:ArrangedInteraction[]|null=null,previousComponent:string|null=null;
       let battleSignature="",deathSignature="";
       const deathMarker=new Container();scene.addChild(deathMarker);
       const map=props.world,index=new Map(map.tiles.map(t=>[key(t),t]));
       for(const t of map.tiles){
         const {x,y}=position(t),n=Math.abs(t.q*137+t.r*73)%7;
-        hex(ground,x,y,SIZE+.6).fill(colors[t.terrain]);
-        if(['plain','forest','hill'].includes(t.terrain))hex(ground,x,y,SIZE-1).fill({color:n<3?0xe1e8a7:0x688d62,alpha:.06});
-        if(t.terrain==='ocean'&&n===1){pixel(ground,x-7,y,10,1,0xb8d9d7);pixel(ground,x+1,y+3,6,1,0xb8d9d7);}
+        drawWorldGround(ground,t.terrain,x,y,n);
         if(t.road) for(const d of [[1,0],[0,1],[1,-1]]){
           const adjacent=index.get(`${t.q+d[0]},${t.r+d[1]}`);if(!adjacent?.road)continue;
-          const b=position(adjacent);roads.moveTo(x,y).lineTo(b.x,b.y).stroke({width:8,color:0xd1c690});roads.moveTo(x,y).lineTo(b.x,b.y).stroke({width:5,color:0xe6d6a2});
+          const b=position(adjacent);paintRoad(roads,{x,y},b);
         }
         if(t.terrain==='river'){
           for(const d of [[1,0],[0,1],[1,-1]]){const other=index.get(`${t.q+d[0]},${t.r+d[1]}`);if(other&&['river','bridge'].includes(other.terrain)){const b=position(other);ground.moveTo(x,y).lineTo(b.x,b.y).stroke({width:21,color:0x86bfc7});}}
@@ -78,21 +53,18 @@ export const MapView=memo(function MapView(props:Props){
       for(const t of [...map.tiles].sort((a,b)=>a.r-b.r)){
         const {x,y}=position(t),n=Math.abs(t.q*137+t.r*73)%7;
         if(t.place){
-          if(t.place.type==='port'||t.place.type==='landing'){pixel(decor,x-15,y-3,30,14,0x846b48);for(let i=0;i<6;i++)pixel(decor,x-14+i*5,y-2,4,12,0xc8a877);pixel(decor,x-17,y-6,4,21,0x796441);pixel(decor,x+13,y-6,4,21,0x796441);if(t.place.type==='port'){pixel(decor,x-9,y-18,18,15,0xe6d9a2);pixel(decor,x-13,y-21,26,6,0x537b77);}}else if(t.place.type==='ruin')ruin(decor,x,y);else house(decor,x,y,t.place.type==='town');
+          if(t.place.type==='port'||t.place.type==='landing'){pixel(decor,x-15,y-3,30,14,0x846b48);for(let i=0;i<6;i++)pixel(decor,x-14+i*5,y-2,4,12,0xc8a877);pixel(decor,x-17,y-6,4,21,0x796441);pixel(decor,x+13,y-6,4,21,0x796441);if(t.place.type==='port'){pixel(decor,x-9,y-18,18,15,0xe6d9a2);pixel(decor,x-13,y-21,26,6,0x537b77);}}else if(t.place.type==='ruin')drawRuin(decor,x,y);else drawHouse(decor,x,y,t.place.type==='town');
           const text=new Text({text:t.place.name,style:{fontFamily:'Microsoft YaHei, sans-serif',fontSize:11,fontWeight:'600',fill:0x384e40,stroke:{color:0xf2f0d8,width:3}}});
           text.anchor.set(.5,0);text.position.set(x,y+15);markers.addChild(text);continue;
         }
 
-        if(t.terrain==='mountain')mountain(decor,x,y);
-        if(t.terrain==='hill'){pixel(decor,x-13,y+2,26,5,0x9eac7b);pixel(decor,x-9,y-3,18,6,0xcbd0a0);pixel(decor,x-4,y-6,8,4,0xd8d9ae);}
-        if(t.terrain==='plain'&&!t.road){if(n===0)tree(decor,x,y,1);else if(n===2){pixel(decor,x-6,y-1,2,3,0xe8e5b5);pixel(decor,x+5,y+3,2,3,0xe8e5b5);pixel(decor,x-5,y+3,2,2,0x94b376);}}
-        if(t.terrain==='bridge'){pixel(decor,x-17,y-8,34,16,0x997751);for(let i=0;i<8;i++)pixel(decor,x-15+i*4,y-7,3,14,0xd6b982);pixel(decor,x-19,y-11,38,3,0x84664a);pixel(decor,x-19,y+8,38,3,0x84664a);}
+        drawTerrainProp(decor,x,y,t.terrain,n,t.road);
       }
       for(const [title,x,y] of [['西 静 海',-625,80],['东 风 海',590,-40]] as const){const label=new Text({text:title,style:{fontFamily:'serif',fontSize:20,fill:0x659b9f,letterSpacing:8}});label.anchor.set(.5);label.position.set(x,y);scene.addChild(label);}
       const seaLine=new Graphics(),boat=new Container(),hull=new Graphics(),boatLabel=new Text({text:'',style:{fontFamily:'Microsoft YaHei',fontSize:10,fontWeight:'bold',fill:0x34574e,stroke:{color:0xfff3d5,width:3}}});
       boat.visible=false;
       boatLabel.anchor.set(.5);boatLabel.y=-36;boat.addChild(hull,boatLabel);scene.addChild(seaLine,boat);
-      pixel(hull,-19,4,38,5,0x6e5945);pixel(hull,-15,9,30,5,0x84684c);pixel(hull,-10,14,20,3,0x94734d);pixel(hull,-13,2,26,5,0xd3b17a);pixel(hull,-1,-28,3,34,0x6f6551);pixel(hull,3,-25,15,20,0xfff0cf);pixel(hull,3,-25,10,4,0xdca55b);pixel(hull,-12,-16,11,15,0xf0ddb0);
+      drawWorldFerry(hull);
       let seaDrawn=false;
       const mapWidth=SQRT3*SIZE*map.radius*2+100,mapHeight=1.5*SIZE*map.radius*2+110;
       let zoom=1,fitScale=1;
@@ -107,7 +79,9 @@ export const MapView=memo(function MapView(props:Props){
         const local=scene.toLocal({x,y});const rf=local.y/(1.5*SIZE),qf=local.x/(SQRT3*SIZE)-rf/2;
         let q=Math.round(qf),r=Math.round(rf),s=Math.round(-qf-rf);const dq=Math.abs(q-qf),dr=Math.abs(r-rf),ds=Math.abs(s+qf+rf);
         if(dq>dr&&dq>ds)q=-r-s;else if(dr>ds)r=-q-s;
-        const tile=index.get(`${q},${r}`);if(tile)latest.current.onSelect(tile);
+        const hit=hitInteraction(latest.current.interactions,local,position);
+        const tile=index.get(hit?key(hit.cell):`${q},${r}`);
+        if(tile)latest.current.onSelect(tile,hit?.id);
       }});
       function wheel(e:WheelEvent){e.preventDefault();const rect=canvas.getBoundingClientRect();zoomAt(Math.exp(-e.deltaY*.0012),e.clientX-rect.left,e.clientY-rect.top);}
       canvas.style.cursor='grab';canvas.style.touchAction='none';canvas.addEventListener('wheel',wheel,{passive:false});
@@ -125,6 +99,11 @@ export const MapView=memo(function MapView(props:Props){
       let frameAt=performance.now(),renderTime=Date.now()+latest.current.clockOffset;
       app.ticker.add(ticker=>{
         const current=latest.current,frameNow=performance.now();
+        if(previousInteractions!==current.interactions||previousComponent!==current.activeComponent){
+          interactionLayer.removeChildren().forEach(child=>child.destroy({children:true}));
+          paintInteractionPins(interactionLayer,current.interactions,position,current.activeComponent);
+          previousInteractions=current.interactions;previousComponent=current.activeComponent;
+        }
         const closedKey=JSON.stringify(current.blockedEdges||[]);
         if(closedKey!==passageSignature){
           passageSignature=closedKey;passageMarks.clear();
@@ -201,18 +180,17 @@ export const MapView=memo(function MapView(props:Props){
             if(!entity){const container=new Container(),body=new Graphics(),bar=new Graphics(),bubble=new Graphics(),label=new Text({text:p.username,style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:10,fill:0x254c41,stroke:{color:0xfff9e6,width:3}}}),battleTag=new Text({text:'战斗中',style:{fontFamily:'Microsoft YaHei,sans-serif',fontSize:12,fontWeight:'bold',fill:0xa44536,stroke:{color:0xfff6dc,width:4}}});label.anchor.set(.5);label.y=-28;battleTag.anchor.set(.5);battleTag.y=-43;battleTag.visible=p.inBattle;bubble.y=-68;container.addChild(body,label,battleTag,bar,bubble);actors.addChild(container);container.position.set(pos.x,pos.y);entity={container,body,bar,barPixels:-1,bubble,emoteCode:'',label,battleTag,target:pos,color:'',online:!p.online,inBattle:!p.inBattle};entities.set(p.id,entity);}
             entity.body.alpha=p.life==='soul'?.4:1;entity.body.rotation=p.life==='down'?Math.PI/2:0;entity.label.text=p.username+(p.life==='soul'?' · 灵魂':p.life==='down'?' · 倒地':p.kind==='monster'?' · 敌对':p.online?'':' · 离线');
             entity.target=pos;entity.container.visible=!current.ferry?.passengerIds.includes(p.id);
-            if(entity.color!==p.color||entity.online!==p.online||entity.inBattle!==p.inBattle){entity.color=p.color;entity.online=p.online;entity.inBattle=p.inBattle;const g=entity.body;g.clear();g.ellipse(0,8,9,4).fill({color:0x365443,alpha:.25});
-              if(p.id===current.me)g.circle(0,2,14).stroke({color:0xfdf7d1,width:2});
-              const c=p.online?Number.parseInt(p.color.slice(1),16):0x929d97;
-              pixel(g,-6,-5,12,12,c);pixel(g,-5,-14,10,10,0xf1d3a3);pixel(g,-7,-17,14,6,c);pixel(g,-4,7,3,5,0x54594b);pixel(g,2,7,3,5,0x54594b);pixel(g,-2,-10,1,2,0x5a5748);pixel(g,3,-10,1,2,0x5a5748);
-              if(p.kind==='monster'){g.clear();g.ellipse(0,9,13,5).fill({color:0x365443,alpha:.25});if(p.species==='archer'){pixel(g,-9,-8,18,19,0x3e6670);pixel(g,-7,-23,14,14,0xdfc69b);pixel(g,-10,-28,20,7,0x53624a);pixel(g,-8,10,6,7,0x344438);pixel(g,3,10,6,7,0x344438);pixel(g,14,-18,3,28,0xb78c51);pixel(g,17,-12,3,17,0xb78c51);pixel(g,-5,-1,28,2,0xdfe4cc);}else if(p.species==='claw'){pixel(g,-13,-8,26,15,0x5c6b3d);pixel(g,-8,-4,16,10,0x77854e);pixel(g,-16,-9,6,10,0x4c5934);pixel(g,10,-9,6,10,0x4c5934);pixel(g,-15,-8,4,2,0x8fa35c);pixel(g,11,-6,3,2,0x8fa35c);pixel(g,-18,-8,5,16,0x4c5934);pixel(g,13,-8,5,16,0x4c5934);pixel(g,-11,6,8,9,0x3f4a30);pixel(g,3,6,8,9,0x3f4a30);pixel(g,-13,13,11,3,0x2f3826);pixel(g,2,13,11,3,0x2f3826);pixel(g,-18,7,2,5,0xede1bc);pixel(g,-16,7,2,5,0xede1bc);pixel(g,-14,7,2,5,0xede1bc);pixel(g,12,7,2,5,0xede1bc);pixel(g,14,7,2,5,0xede1bc);pixel(g,16,7,2,5,0xede1bc);pixel(g,-7,-19,14,10,0x6c7a48);pixel(g,-9,-23,4,5,0x4c5934);pixel(g,5,-23,4,5,0x4c5934);pixel(g,-5,-16,3,3,0xffce69);pixel(g,2,-16,3,3,0xffce69);pixel(g,-5,-11,10,2,0x3a2a22);pixel(g,-4,-10,2,3,0xede1bc);pixel(g,2,-10,2,3,0xede1bc);}else{pixel(g,-10,-8,20,17,0xa83c34);pixel(g,-7,-19,14,14,0xc96a56);pixel(g,-10,-23,5,9,0xede0bb);pixel(g,5,-23,5,9,0xede0bb);pixel(g,-5,-14,3,3,0xffd071);pixel(g,3,-14,3,3,0xffd071);pixel(g,-14,-5,5,15,0x8a322c);pixel(g,9,-5,5,15,0x8a322c);pixel(g,-7,9,5,5,0x493c34);pixel(g,3,9,5,5,0x493c34);}}
+            if(entity.color!==p.color||entity.online!==p.online||entity.inBattle!==p.inBattle){entity.color=p.color;entity.online=p.online;entity.inBattle=p.inBattle;drawWorldActor(entity.body,p,p.id===current.me);
               entity.battleTag.visible=p.inBattle;entity.container.alpha=p.online?1:.65;
             }
           }
         }
         for(const [id,entity] of entities){
           const emote=current.emotes.find(e=>e.accountId===id&&e.expiresAt>now);entity.bubble.visible=!!emote;
-          if(emote){if(entity.emoteCode!==emote.code){entity.emoteCode=emote.code;const g=entity.bubble;g.clear();g.poly([-19,-18,19,-18,19,-15,22,-15,22,12,19,12,19,15,5,15,0,20,-3,15,-19,15,-19,12,-22,12,-22,-15,-19,-15]).fill(0xfff9e5).stroke({color:0x607753,width:1.5});const art=emoteArt.find(a=>a.code===emote.code);art?.pixels.forEach((row,y)=>[...row].forEach((c,x)=>{if(c!=='.')pixel(g,x*2-12,y*2-13,2,2,Number.parseInt(emotePalette[c].slice(1),16));}));}entity.bubble.alpha=Math.min(1,(emote.expiresAt-now)/250);}
+          if(emote){
+            if(entity.emoteCode!==emote.code){entity.emoteCode=emote.code;drawEmoteBubble(entity.bubble,emote.code);}
+            entity.bubble.alpha=Math.min(1,(emote.expiresAt-now)/250);
+          }
           const action=current.actions.find(a=>a.accountId===id),barPixels=action?Math.round(36*Math.max(0,Math.min(1,(now-action.startedAt)/(action.endsAt-action.startedAt)))):-1;
           if(barPixels!==entity.barPixels){entity.barPixels=barPixels;entity.bar.clear();if(action){entity.bar.roundRect(-19,-43,38,6,2).fill(0x354d40);entity.bar.roundRect(-18,-42,barPixels,4,1).fill(0xe8c875);}}
           const f=Math.min(1,ticker.deltaMS/100);entity.container.x+=(entity.target.x-entity.container.x)*f;entity.container.y+=(entity.target.y-entity.container.y)*f;}
@@ -226,5 +204,5 @@ export const MapView=memo(function MapView(props:Props){
     init().catch(e=>{console.error(e);if(host.current)host.current.innerHTML='<div class="map-error">画面初始化失败，请开启浏览器硬件加速后刷新。</div>';});
     return()=>{disposed=true;cleanup();};
   },[props.world.version]);
-  return <div className="map-canvas" ref={host} aria-label="大陆地图，拖动平移，滚轮缩放，点击选择地块"/>;
+  return <div className="map-canvas" style={{visibility:props.active?undefined:'hidden'}} aria-hidden={!props.active} ref={host} aria-label="大陆地图，拖动平移，滚轮缩放，点击选择地块"/>;
 });

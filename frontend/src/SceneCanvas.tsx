@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState,type RefObject} from 'react';
 import {Application,Container,Graphics,Text} from 'pixi.js';
 import 'pixi.js/unsafe-eval';
+import {hexPath,HEX_SCENE} from './mapPaint';
 import {bindMapGestures} from './mapGestures';
 import type {Hex} from './types';
 
@@ -17,7 +18,7 @@ export function sceneHex(x:number,y:number):Hex{
 }
 export function hexShape(g:Graphics,h:Hex,radius=HEX_SIZE){
   const {x,y}=scenePoint(h);
-  return g.poly(Array.from({length:6},(_,i)=>[x+radius*Math.cos(i*Math.PI/3),y+radius*Math.sin(i*Math.PI/3)]).flat());
+  return hexPath(g,x,y,radius,HEX_SCENE);
 }
 export function sceneLabel(layer:Container,value:string,x:number,y:number,size=12,color='#334f41'){
   const label=new Text({text:value,style:{fontFamily:'Microsoft YaHei, sans-serif',fontSize:size,fontWeight:'bold',fill:color,stroke:{color:'#f7f1d5',width:2.5}},resolution:2});
@@ -31,24 +32,27 @@ export function sceneActor(layer:Container,id:string,h:Hex){
   return actor;
 }
 export type DrawScene=(layer:Container)=>void;
-export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,drawOverlay,className,label}:{
-  host:RefObject<HTMLDivElement|null>;camera:Camera;onCamera:(camera:Camera)=>void;onSelect:(h:Hex)=>void;
-  onHover?:(h:Hex|null)=>void;drawGround:DrawScene;drawOverlay:DrawScene;className:string;label:string;
+export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,drawHighlights,drawOverlay,drawEffects,className,label,entryPulse}:{
+  host:RefObject<HTMLDivElement|null>;camera:Camera;onCamera:(camera:Camera)=>void;onSelect:(h:Hex,point?:{x:number;y:number})=>void;
+  onHover?:(h:Hex|null)=>void;drawGround:DrawScene;drawHighlights?:DrawScene;drawOverlay:DrawScene;drawEffects?:DrawScene;
+  className:string;label:string;entryPulse?:{id:string;cell:Hex};
 }){
   const latest=useRef({camera,onCamera,onSelect,onHover});
   latest.current={camera,onCamera,onSelect,onHover};
-  const [surface,setSurface]=useState<{app:Application;stage:Container;ground:Container;overlay:Container}|null>(null);
+  const [surface,setSurface]=useState<{app:Application;stage:Container;ground:Container;highlights:Container;overlay:Container;effects:Container}|null>(null);
   const [failed,setFailed]=useState(false);
   const focus=useRef<Hex|null>(null);
+  const pulse=useRef(entryPulse);pulse.current=entryPulse;
   useEffect(()=>{
     const node=host.current;if(!node)return;
     const app=new Application();
     let disposed=false,ready=false,cleanup=()=>{};
     const scale=()=>Math.min(node.clientWidth,node.clientHeight)*latest.current.camera.zoom/latest.current.camera.span;
-    const hexAt=(x:number,y:number)=>{
+    const pointAt=(x:number,y:number)=>{
       const s=scale(),c=latest.current.camera.center;
-      return sceneHex(c.x+(x-node.clientWidth/2)/s,c.y+(y-node.clientHeight/2)/s);
+      return {x:c.x+(x-node.clientWidth/2)/s,y:c.y+(y-node.clientHeight/2)/s};
     };
+    const hexAt=(x:number,y:number)=>{const p=pointAt(x,y);return sceneHex(p.x,p.y);};
     const change=(next:Camera)=>{latest.current.camera=next;latest.current.onCamera(next);};
     const zoom=(factor:number,x:number,y:number)=>{
       const c=latest.current.camera,z=Math.max(.45,Math.min(4,c.zoom*factor));
@@ -59,8 +63,8 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
     void app.init({width:Math.max(1,node.clientWidth),height:Math.max(1,node.clientHeight),backgroundAlpha:0,antialias:true,resolution:Math.min(devicePixelRatio,2),autoDensity:true,autoStart:false,preference:'webgl'}).then(()=>{
       ready=true;
       if(disposed){app.destroy(true,{children:true});return;}
-      const stage=new Container(),ground=new Container(),overlay=new Container();
-      stage.addChild(ground,overlay);app.stage.addChild(stage);
+      const stage=new Container(),ground=new Container(),highlights=new Container(),overlay=new Container(),effects=new Container();
+      stage.addChild(ground,highlights,overlay,effects);app.stage.addChild(stage);
       const canvas=app.canvas;canvas.style.display='block';canvas.style.pointerEvents='none';node.prepend(canvas);
       const render=()=>{
         const c=latest.current.camera,s=scale();
@@ -71,17 +75,22 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
         app.renderer.resize(node.clientWidth,node.clientHeight);render();
       });
       observer.observe(node);
-      const release=bindMapGestures(node,{pan:(dx,dy)=>{const c=latest.current.camera,s=scale();change({...c,center:{x:c.center.x-dx/s,y:c.center.y-dy/s}});},zoom,tap:(x,y)=>{focus.current=hexAt(x,y);latest.current.onSelect(focus.current);}});
+      const release=bindMapGestures(node,{pan:(dx,dy)=>{const c=latest.current.camera,s=scale();change({...c,center:{x:c.center.x-dx/s,y:c.center.y-dy/s}});},zoom,tap:(x,y)=>{focus.current=hexAt(x,y);latest.current.onSelect(focus.current,pointAt(x,y));}});
       const wheel=(e:WheelEvent)=>{e.preventDefault();const box=node.getBoundingClientRect();zoom(Math.exp(-e.deltaY*.0012),e.clientX-box.left,e.clientY-box.top);};
       const move=(e:PointerEvent)=>{if(e.pointerType==='touch'||e.buttons)return;const box=node.getBoundingClientRect();latest.current.onHover?.(hexAt(e.clientX-box.left,e.clientY-box.top));};
       const leave=()=>latest.current.onHover?.(null);
       node.addEventListener('wheel',wheel,{passive:false});node.addEventListener('pointermove',move);node.addEventListener('pointerleave',leave);
       cleanup=()=>{release();observer.disconnect();node.removeEventListener('wheel',wheel);node.removeEventListener('pointermove',move);node.removeEventListener('pointerleave',leave);};
-      setSurface({app,stage,ground,overlay});
+      setSurface({app,stage,ground,highlights,overlay,effects});
     }).catch(()=>{if(!disposed)setFailed(true);});
     return ()=>{disposed=true;cleanup();if(ready)app.destroy(true,{children:true});};
   },[host]);
   useEffect(()=>{if(surface){surface.ground.removeChildren().forEach(node=>node.destroy({children:true}));drawGround(surface.ground);}},[surface,drawGround]);
+  useEffect(()=>{
+    if(!surface)return;
+    const layer=surface.highlights;
+    layer.removeChildren().forEach(node=>node.destroy({children:true}));drawHighlights?.(layer);
+  },[surface,drawHighlights]);
   useEffect(()=>{
     if(!surface)return;
     const {overlay,app}=surface;
@@ -106,10 +115,32 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
     return ()=>cancelAnimationFrame(frame);
   },[surface,drawOverlay]);
   useEffect(()=>{
+    if(!surface)return;
+    const layer=surface.effects;
+    layer.removeChildren().forEach(node=>node.destroy({children:true}));drawEffects?.(layer);
+  },[surface,drawEffects]);
+  useEffect(()=>{
     if(!surface||!host.current)return;
     const {app,stage}=surface,s=Math.min(host.current.clientWidth,host.current.clientHeight)*camera.zoom/camera.span;
     stage.scale.set(s);stage.position.set(app.screen.width/2-camera.center.x*s,app.screen.height/2-camera.center.y*s);app.render();
-  },[surface,host,camera.center,camera.zoom,camera.span,drawGround,drawOverlay]);
+  },[surface,host,camera.center,camera.zoom,camera.span,drawGround,drawHighlights,drawOverlay,drawEffects]);
+  useEffect(()=>{
+    const current=pulse.current;
+    if(!surface||!current||window.matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+    const point=scenePoint(current.cell);
+    const ring=surface.stage.addChild(new Graphics().circle(0,0,22).stroke({color:0xffdf82,width:3}));
+    ring.position.set(point.x,point.y+8);
+    const start=performance.now();
+    let frame=0;
+    const animate=(now:number)=>{
+      const progress=Math.min(1,(now-start)/260);
+      ring.alpha=1-progress;ring.scale.set(.8+progress*.65);
+      surface.app.render();
+      if(progress<1)frame=requestAnimationFrame(animate);
+    };
+    frame=requestAnimationFrame(animate);
+    return ()=>{cancelAnimationFrame(frame);if(!ring.destroyed)ring.destroy();};
+  },[surface,entryPulse?.id]);
   return <div ref={host} className={className} role="group" aria-label={label} tabIndex={0} onKeyDown={event=>{
     const directions:Record<string,Hex>={ArrowLeft:{q:-1,r:0},ArrowRight:{q:1,r:0},ArrowUp:{q:0,r:-1},ArrowDown:{q:0,r:1}};
     const h=focus.current??sceneHex(camera.center.x,camera.center.y),delta=directions[event.key];

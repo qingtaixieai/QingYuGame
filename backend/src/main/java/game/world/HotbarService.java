@@ -59,6 +59,7 @@ public class HotbarService {
         var own=actors.stream().filter(a->a.accountId().equals(id)).findFirst().orElse(null);
         int points=(Integer)b.getOrDefault("turnPoints",0);
         String common=own==null?"当前不在战斗中":!own.character().alive()?"倒地或灵魂状态无法行动":own.entryRound()>(Integer)b.get("round")?"下一轮开始行动":!id.equals(b.get("turnAccountId"))?"现在不是你的回合":"";
+        var access=common.isEmpty()?battles.boardAccess((UUID)b.get("id"),own,actors,(List<BattleService.Edge>)b.get("edges")):null;
         var available=new ArrayList<Action>();
         var shared=new HashMap<String,BattleService.ActionOption>();battles.actionOptions(id).forEach(o->shared.put(o.definition().id(),o));
         for(var a:actions){
@@ -70,10 +71,9 @@ public class HotbarService {
                 else if(a.command().equals("guard")&&own.reactionPoints()>=2)reason="反应点已满";
                 else if(a.command().equals("rescue")&&actors.stream().noneMatch(t->t.character().life().equals("down")&&!t.character().npc()&&distance(own,t)==1))reason="没有相邻倒地旅人";
                 else if(a.command().equals("bandage")&&actors.stream().noneMatch(t->t.character().alive()&&t.character().hp()<t.character().maxHp()&&distance(own,t)<=1))reason="身边没有需要治疗的角色";
-                else if(a.command().equals("move")&&new WorldMap.Hex(own.q(),own.r()).neighbors().stream().noneMatch(h->WeaponRules.distance(h,new WorldMap.Hex(0,0))<=BattleService.RADIUS&&actors.stream().noneMatch(t->t.q()==h.q()&&t.r()==h.r())))reason="没有可达空格";
+                else if(a.command().equals("move")&&!access.canMove())reason="没有可达空格";
                 else if(a.command().contains("withdraw")){
-                    var edges=(List<BattleService.Edge>)b.get("edges");
-                    if(BattleService.sides(own.q(),own.r()).stream().noneMatch(d->edges.get(d).walkable()))reason="需要站在可撤离外圈";
+                    if(!access.canWithdraw())reason="需要站在可用的撤离边缘或门格";
                     else if(a.command().equals("force-withdraw")&&!Boolean.TRUE.equals(b.get("turnStartEdge")))reason="本回合开始时不在外圈";
                 }
             }

@@ -2,24 +2,42 @@
 .scene-view[data-level="3"]{background:#79866c}
 .scene-board{position:absolute;inset:0;touch-action:none;user-select:none}
 .scene-board canvas,.battle-board canvas{display:block}
-.scene-caption,.scene-detail,.scene-error{position:absolute;left:calc(var(--scene-ui-left) + 12px);background:#faf8eaf2;border:1px solid #c8cbb0;border-radius:10px;color:#314936}
-.scene-caption{top:calc(var(--top-height,76px) + 8px);display:grid;gap:2px;padding:8px 12px;pointer-events:none}
-.scene-caption span,.scene-detail small{font-size:11px;color:#6b7961}
-.scene-actions{position:absolute;right:calc(var(--scene-right) + 90px);top:calc(var(--top-height,76px) + 8px);display:grid;gap:5px;justify-items:end;max-width:45%}
-.scene-actions button,.scene-interaction button,.scene-error button{display:inline-flex;align-items:center;gap:5px;padding:7px 10px;border:1px solid #aeb69b;border-radius:7px;background:#faf8ea;color:#314936}
+.game-shell:has(.scene-view:not([hidden])) .combat-log{right:calc(12px + min(282px,34vw) + 10px);top:calc(var(--top-height,76px) + 12px)}
+.scene-action-list{display:grid;gap:6px}
+.scene-action-list>button:not(.primary),.scene-interaction button,.scene-error button{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 10px;border:1px solid #aeb69b;border-radius:7px;background:#faf8ea;color:#314936}
 .scene-actions button:disabled,.scene-interaction button:disabled{opacity:.5}
-.scene-detail{bottom:max(43px,env(safe-area-inset-bottom,0px));width:278px;max-width:calc(100% - var(--scene-ui-left) - 76px);max-height:58%;overflow:auto;padding:11px}
-.scene-detail header,.scene-interaction{display:flex;align-items:center;justify-content:space-between;gap:7px}
-.scene-detail h3{margin:0}.scene-detail p{margin:5px 0}.scene-interaction{padding:5px 0}.scene-detail .primary{margin-top:8px}
-.scene-error{top:38%;padding:12px}
-.game-shell .scene-view .scene-tools{position:absolute;right:var(--scene-right);top:50%;transform:translateY(-50%);bottom:auto;z-index:4}
+.scene-interaction{display:flex;align-items:center;justify-content:space-between;gap:7px;padding:5px 0}
+.scene-error{position:absolute;left:calc(var(--scene-ui-left) + 12px);top:38%;padding:12px;border:1px solid #c8cbb0;border-radius:10px;background:#faf8eaf2}
 .scene-enter{position:absolute;right:max(70px,env(safe-area-inset-right,0px));top:calc(var(--top-height,76px) + 10px);z-index:4;padding:7px 10px;border:1px solid #aeb69b;border-radius:7px;background:#faf8ea;color:#314936}
 .game-shell{--scene-ui-left:calc(var(--rail-width) + env(safe-area-inset-left,0px))}
 .game-shell.sidebar-open{--scene-ui-left:calc(var(--rail-width) + var(--side-width) + env(safe-area-inset-left,0px))}
-.game-shell:has(.scene-view) .world-side-panels,.game-shell:has(.scene-view) .location-card,.game-shell:has(.scene-view) .map-tool-group:not(.scene-tools),.game-shell:has(.scene-view) .battle-result{display:none!important}
-.game-shell:has(.scene-view) :is(.map-title,.map-bottom,.compass){display:none}
+.game-shell:has(.scene-view:not([hidden])) .world-side-panels:not(.scene-side-panels),.game-shell:has(.scene-view:not([hidden])) .location-card:not(.scene-detail),.game-shell:has(.scene-view:not([hidden])) .map-tool-group:not(.scene-tools,.battle-tools),.game-shell:has(.scene-view:not([hidden])) .battle-result{display:none!important}
 @media(max-height:600px){
-  .scene-caption{padding:4px 7px;font-size:12px}
   .scene-actions button,.scene-interaction button,.scene-detail .primary{padding:5px 7px;font-size:11px}
-  .scene-detail{bottom:7px;width:224px;padding:7px;font-size:12px}
+  .game-shell:has(.scene-view:not([hidden])) .combat-log{right:12px;top:calc(var(--top-height,42px) + 48px)}
+  .scene-view .scene-actions p{margin:6px 0;font-size:10px}
+  .scene-view .scene-actions header strong{font-size:13px}
+}
+.scene-view .map-bottom .position-pill{margin-left:auto}
+
+.scene-view[hidden]{display:none}
+.game-shell .battle-surface.battle-surface-shared{background:transparent;pointer-events:none}
+.battle-surface-shared>:is(.loot-battle-open,.combat-log,.battle-ammo,.participant-info,.intent-info,.battle-cell-loot,.battle-tools,.action-hotbar,.battle-actions){pointer-events:auto}
+.battle-surface-shared .battle-grain{display:none}
+.game-shell:has(.scene-view:not([hidden]) .place-actions) .production-progress[data-task-kind='rest']{display:none}
+
+/* Anchor the combat HUD beside the scene so the camera does not have to move on entry. */
+.game-shell .battle-surface-shared .initiative-shell{
+  left:calc(var(--rail-width) + 12px); right:auto; align-items:flex-start;
+  width:min(34vw,335px); top:calc(var(--top-height,76px) + 4px);
+}
+.battle-surface-shared .initiative-strip{max-width:100%}
+.game-shell .battle-surface-shared .loot-battle-open{top:calc(var(--top-height,76px) + 177px)}
+.game-shell .battle-surface-shared .battle-ammo{top:calc(var(--top-height,76px) + 218px)}
+.game-shell .battle-surface-shared :is(.battle-cell-loot,.intent-info){top:calc(var(--top-height,76px) + 258px)}
+@media(max-height:600px) and (orientation:landscape){
+  .game-shell .battle-surface-shared .initiative-shell{width:min(30vw,250px)}
+  .game-shell .battle-surface-shared .loot-battle-open{top:calc(var(--top-height,42px) + 109px)}
+  .game-shell .battle-surface-shared .battle-ammo{top:calc(var(--top-height,42px) + 143px)}
+  .game-shell .battle-surface-shared :is(.battle-cell-loot,.intent-info){top:calc(var(--top-height,42px) + 172px)}
 }
