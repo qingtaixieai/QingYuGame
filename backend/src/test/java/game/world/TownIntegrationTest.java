@@ -35,6 +35,23 @@ class TownIntegrationTest {
   assertTrue(withdrawal.stream().allMatch(x->x.disabledReason().isEmpty()),withdrawal.toString());
   tx().executeWithoutResult(s->battles.withdraw(a,6,true,Set.of(a,b),System.currentTimeMillis()));assertEquals(2,runtime.map(runtime.position(a).sceneId()).level());assertFalse(battles.engaged(a));assertTrue(battles.engaged(b));
  }}
+ @Test void preparedIndoorWithdrawalUsesDoorOnNextTurn(){synchronized(world){
+  var player=actor();enter(player,"旅店");
+  var room=runtime.position(player).sceneId();
+  var keeper=db.queryForObject("select npc_id from town_buildings where id=?",UUID.class,room);
+  var battle=world.startBattle(player,keeper,world.map().version());
+  var exit=towns.doors(room).getFirst();
+  db.update("update battle_actors set q=?,r=? where encounter_id=? and account_id=?",exit.cell().q(),exit.cell().r(),battle,player);
+  runtime.put(player,room,exit.cell());
+  db.update("update battle_encounters set turn_account_id=?,turn_points=4,turn_start_edge=false where id=?",player,battle);
+  long now=System.currentTimeMillis();
+  tx().executeWithoutResult(s->battles.withdraw(player,6,false,Set.of(player),now));
+  assertEquals(6,db.queryForObject("select withdraw_direction from battle_actors where encounter_id=? and account_id=?",Integer.class,battle,player));
+  assertEquals(room,runtime.position(player).sceneId());
+  tx().executeWithoutResult(s->battles.endTurn(keeper,Set.of(player),now+1));
+  assertEquals(exit.destinationScene(),runtime.position(player).sceneId());
+  assertFalse(battles.engaged(player));
+ }}
  @Test void occupiedDoorDoesNotTeleportToFarAwayCells(){synchronized(world){var a=actor();var d=door(a,"商店");tx().executeWithoutResult(s->runtime.put(a,runtime.position(a).sceneId(),d.cell()));var room=runtime.map(d.destinationScene());var edited=new SceneMap(room.id(),room.worldVersion(),room.generationVersion(),3,room.owner(),room.name(),room.radius(),room.cells().stream().map(c->WorldMap.distance(c.hex(),d.destination())<=2?new SceneMap.Cell(c.q(),c.r(),c.terrain(),false):c).toList());tx().executeWithoutResult(s->scenes.save(edited));var before=runtime.position(a);assertThrows(RuntimeException.class,()->world.useDoor(a,d.id(),world.map().version()));assertEquals(before,runtime.position(a));}}
  @Test void roomCannotCrossWorldEdgeAndMoveCancelsInnPayment(){synchronized(world){var a=actor();enter(a,"旅店");assertThrows(RuntimeException.class,()->world.crossScene(a,1,world.map().version()));long money=equipment.available(a,"copper_coin");tx().executeWithoutResult(s->{work.start(a,world.map(),new ProductionService.Start("rest",null,null,null,null),System.currentTimeMillis());work.moving(a);});assertNull(work.current(a));assertEquals(money,equipment.available(a,"copper_coin"));}}
  @Test void innReservesMoneyCancelsAndCompletesWithoutClearingStatus(){synchronized(world){var a=actor();enter(a,"旅店");db.update("update characters set hp=3 where id=?",a);statuses.apply(a,"poison",a);var bind=characters.get(a).bindQ();long before=equipment.available(a,"copper_coin"),now=System.currentTimeMillis();tx().executeWithoutResult(s->work.start(a,world.map(),new ProductionService.Start("rest",null,null,null,null),now));assertEquals(before-5,equipment.available(a,"copper_coin"));tx().executeWithoutResult(s->work.cancel(a));assertEquals(before,equipment.available(a,"copper_coin"));tx().executeWithoutResult(s->{work.start(a,world.map(),new ProductionService.Start("rest",null,null,null,null),now);work.advance(now+10000);});assertEquals(before-5,equipment.available(a,"copper_coin"));assertEquals(characters.get(a).maxHp(),characters.get(a).hp());assertTrue(statuses.has(a,"poison"));assertEquals(bind,characters.get(a).bindQ());assertNull(work.current(a));}}

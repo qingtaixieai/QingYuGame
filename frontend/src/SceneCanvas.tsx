@@ -26,6 +26,36 @@ export function sceneLabel(layer:Container,value:string,x:number,y:number,size=1
 }
 export type Camera={center:{x:number;y:number};zoom:number;span:number};
 const actorPrefix='actor:';
+export const battleCaptionLabel='battle-actor-caption';
+function sizeBattleCaptions(layer:Container,scale:number){
+  const compact=window.matchMedia('(max-height:600px) and (orientation:landscape)').matches;
+  const factor=compact?Math.max(1,Math.min(2.5,10/Math.max(1,12*scale))):1;
+  const captions:{node:Container;left:number;right:number;top:number;bottom:number}[]=[];
+  function add(node:Container,x:number,y:number){
+    node.scale.set(factor);node.pivot.y=0;
+    if(!compact)return;
+    const bounds=node.getLocalBounds();
+    captions.push({node,left:x+bounds.minX*factor,right:x+bounds.maxX*factor,
+      top:y+bounds.minY*factor,bottom:y+bounds.maxY*factor});
+  }
+  for(const child of layer.children){
+    if(child.label===battleCaptionLabel)add(child,child.x,child.y);
+    if(!child.label?.startsWith(actorPrefix))continue;
+    for(const caption of child.children)if(caption.label===battleCaptionLabel)add(caption,child.x+caption.x,child.y+caption.y);
+  }
+  const gap=2/Math.max(scale,.01);
+  const placed:typeof captions=[];
+  for(const caption of captions.sort((a,b)=>b.bottom-a.bottom)){
+    let shift=0;
+    for(const lower of placed){
+      if(caption.left>=lower.right||caption.right<=lower.left||caption.top-shift>=lower.bottom+gap)continue;
+      shift=Math.max(shift,caption.bottom-lower.top+gap);
+    }
+    caption.node.pivot.y=shift/factor;
+    placed.push({...caption,top:caption.top-shift,bottom:caption.bottom-shift});
+    placed.sort((a,b)=>b.bottom-a.bottom);
+  }
+}
 export function sceneActor(layer:Container,id:string,h:Hex){
   const actor=new Container({label:actorPrefix+id}),p=scenePoint(h);
   actor.position.set(p.x,p.y);layer.addChild(actor);
@@ -68,7 +98,8 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
       const canvas=app.canvas;canvas.style.display='block';canvas.style.pointerEvents='none';node.prepend(canvas);
       const render=()=>{
         const c=latest.current.camera,s=scale();
-        stage.scale.set(s);stage.position.set(app.screen.width/2-c.center.x*s,app.screen.height/2-c.center.y*s);app.render();
+        stage.scale.set(s);stage.position.set(app.screen.width/2-c.center.x*s,app.screen.height/2-c.center.y*s);
+        sizeBattleCaptions(overlay,s);app.render();
       };
       const observer=new ResizeObserver(()=>{
         if(!node.clientWidth||!node.clientHeight)return;
@@ -93,7 +124,7 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
   },[surface,drawHighlights]);
   useEffect(()=>{
     if(!surface)return;
-    const {overlay,app}=surface;
+    const {overlay,app,stage}=surface;
     const before=new Map(overlay.children.filter(node=>node.label?.startsWith(actorPrefix)).map(node=>[node.label,{x:node.x,y:node.y}]));
     overlay.removeChildren().forEach(node=>node.destroy({children:true}));drawOverlay(overlay);
     const moves=overlay.children.flatMap(node=>{
@@ -108,6 +139,7 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
     const animate=(now:number)=>{
       const t=Math.min(1,(now-start)/155);
       for(const {node,from,to} of moves)node.position.set(from.x+(to.x-from.x)*t,from.y+(to.y-from.y)*t);
+      sizeBattleCaptions(overlay,stage.scale.x);
       app.render();
       if(t<1)frame=requestAnimationFrame(animate);
     };
@@ -121,8 +153,9 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
   },[surface,drawEffects]);
   useEffect(()=>{
     if(!surface||!host.current)return;
-    const {app,stage}=surface,s=Math.min(host.current.clientWidth,host.current.clientHeight)*camera.zoom/camera.span;
-    stage.scale.set(s);stage.position.set(app.screen.width/2-camera.center.x*s,app.screen.height/2-camera.center.y*s);app.render();
+    const {app,stage,overlay}=surface,s=Math.min(host.current.clientWidth,host.current.clientHeight)*camera.zoom/camera.span;
+    stage.scale.set(s);stage.position.set(app.screen.width/2-camera.center.x*s,app.screen.height/2-camera.center.y*s);
+    sizeBattleCaptions(overlay,s);app.render();
   },[surface,host,camera.center,camera.zoom,camera.span,drawGround,drawHighlights,drawOverlay,drawEffects]);
   useEffect(()=>{
     const current=pulse.current;

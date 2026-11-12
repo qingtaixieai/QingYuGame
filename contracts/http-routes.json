@@ -17,6 +17,7 @@
     "GET /api/chat/images/{id}",
     "GET /api/chat/messages",
     "GET /api/chat/status",
+    "GET /api/creatures",
     "GET /api/handover",
     "GET /api/health",
     "GET /api/hotbar",

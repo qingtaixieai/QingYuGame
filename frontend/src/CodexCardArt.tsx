@@ -9,11 +9,10 @@ import {drawWorldFerry,drawWorldGround,drawWorldMonster} from './worldArt';
 import type {Tile} from './types';
 
 const origin={q:0,r:0};
-const species:Record<string,string>={'恶霸':'bully','利爪怪':'claw','弓箭手':'archer'};
 const pictures=new Map<string,string>();
 
 function draw(g:Graphics,id:string,kind:string,world:boolean,variant:number){
-  if(kind==='monsters')drawWorldMonster(g,species[id]??'bully');
+  if(kind==='monsters')drawWorldMonster(g,id);
   else if(kind==='terrain'){
     if(world)drawWorldGround(g,id,0,0,variant);
     else {
@@ -37,7 +36,7 @@ export function useCodexPictures(kind:string,ids:string[],world:boolean,worldTil
   const [failed,setFailed]=useState(false);
   useEffect(()=>{
     setFailed(false);
-    if(kind==='items')return;
+    if(kind==='items'||kind==='recipes')return;
     const list=JSON.parse(signature) as typeof samples;
     let disposed=false;
     const keyFor=(id:string,variant:number)=>`${kind}:${world}:${id}:${variant}`;
@@ -75,7 +74,7 @@ export function useCodexPictures(kind:string,ids:string[],world:boolean,worldTil
 }
 
 export function CodexCardArt({id,kind,picture,failed}:{id:string;kind:string;picture?:string;failed:boolean}){
-  if(kind==='items')return <span className="codex-item-icon"><ItemIcon code={id}/></span>;
+  if(kind==='items'||kind==='recipes')return <span className="codex-item-icon"><ItemIcon code={id}/></span>;
   if(kind==='components'&&id==='leave')return <span className="codex-item-icon"><LogOut/></span>;
   if(picture)return <img src={picture} alt="" draggable={false}/>;
   return <span className="codex-art-status">{failed?'主图暂不可用':'载入中…'}</span>;

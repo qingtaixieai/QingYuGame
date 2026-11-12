@@ -1,30 +1,51 @@
-import {useState} from 'react';
+import {useEffect,useState} from 'react';
+import {api} from './api';
 import {CodexCardArt,useCodexPictures} from './CodexCardArt';
-import {creatureEntries,interactionComponents,terrainModules} from './sceneModules';
+import {interactionComponents,terrainModules} from './sceneModules';
+import type {ProductionState,Recipe} from './shared/production';
 import {terrainNames,walkable,type Item,type World} from './types';
 import './codex.css';
 
-const tabs=[['components','交互组件'],['items','道具'],['monsters','怪物'],['terrain','地块']] as const;
+const tabs=[['components','交互组件'],['items','道具'],['monsters','怪物'],['terrain','地块'],['recipes','配方']] as const;
 type Tab=typeof tabs[number][0];
-type Entry={name:string;description:string;condition?:string;icon:string};
+type Entry={name:string;description:string;condition?:string};
 type Row=Entry&{key:string};
+type Definition=Pick<Item,'code'|'name'|'description'>;
+type Creature=Definition;
+type Catalog={items:Definition[];creatures:Creature[];recipes:Recipe[]};
 const rows=(entries:Record<string,Entry>)=>Object.entries(entries).map(([key,e])=>({...e,key}));
+const definitionRows=(entries:Definition[])=>entries.map(({code,...entry})=>({...entry,key:code}));
 
-export function GameCodex({items,world}:{items:Item[];world:World|null}){
+export function GameCodex({world}:{world:World|null}){
   const [tab,setTab]=useState<Tab>('components');
   const [terrainLayer,setTerrainLayer]=useState<'world'|'scene'>('world');
   const [selected,setSelected]=useState<string|null>(null);
-  const terrains=[...new Set(world?.tiles.map(tile=>tile.terrain))].sort();
-  const worldTiles:Row[]=terrains.map(key=>{
-    const tile=world?.tiles.find(t=>t.terrain===key);
-    const name=terrainNames[key]??key;
+  const [catalog,setCatalog]=useState<Catalog|null>(null);
+  const [failed,setFailed]=useState(false),[attempt,setAttempt]=useState(0);
+  useEffect(()=>{
+    let active=true;
+    setFailed(false);
+    Promise.all([api<Definition[]>('/items'),api<Creature[]>('/creatures'),api<Pick<ProductionState,'recipes'>>('/production')])
+      .then(([items,creatures,{recipes}])=>{if(active)setCatalog({items,creatures,recipes});})
+      .catch(()=>{if(active)setFailed(true);});
+    return ()=>{active=false;};
+  },[attempt]);
+  const worldTiles:Row[]=Object.entries(terrainNames).map(([key,name])=>{
     return {key,name,description:key==='river'||key==='ocean'?'水域，无法直接步行通过。':`大世界的${name}地块。`,
-      condition:tile&&!walkable(tile)?'不可直接通行。':'可通行。',icon:key==='forest'?'forest':key==='river'||key==='ocean'?'water':'grass'};
+      condition:walkable({q:0,r:0,terrain:key,road:false,place:null})?'可通行。':'不可直接通行。'};
   });
+  const itemNames=new Map(catalog?.items.map(item=>[item.code,item.name]));
+  const recipes:Row[]=catalog?.recipes.map(recipe=>({
+    key:recipe.code,name:recipe.name,
+    description:Object.entries(recipe.materials).sort(([a],[b])=>a.localeCompare(b)).map(([code,count])=>`${itemNames.get(code)??code} × ${count}`).join('、'),
+    condition:`每批产出 ${recipe.output} 个 · ${recipe.duration/1000} 秒`,
+  }))??[];
   const entries:Row[]=tab==='components'?rows(interactionComponents):tab==='items'
-    ?items.map(item=>({key:item.code,name:item.name,description:item.description,icon:'bag'}))
-    :tab==='monsters'?creatureEntries.map(entry=>({...entry,key:entry.name}))
+    ?definitionRows(catalog?.items??[])
+    :tab==='monsters'?definitionRows(catalog?.creatures??[])
+    :tab==='recipes'?recipes
     :terrainLayer==='world'?worldTiles:rows(terrainModules);
+  const usesCatalog=tab==='items'||tab==='monsters'||tab==='recipes';
   const {ready:pictures,failed:artFailed}=useCodexPictures(tab,entries.map(entry=>entry.key),tab==='terrain'&&terrainLayer==='world',world?.tiles);
   const category=tabs.find(([key])=>key===tab)?.[1];
   const active=entries.find(entry=>entry.key===selected);
@@ -42,7 +63,8 @@ export function GameCodex({items,world}:{items:Item[];world:World|null}){
           <span className="codex-card-copy"><small>{category}</small><span>{entry.description||'暂无简介。'}</span></span>
         </button>
       </li>)}</ul>
-      {!entries.length&&<p className="empty">正在读取图鉴条目…</p>}
+      {!entries.length&&usesCatalog&&(failed?<div className="empty" role="alert">图鉴数据暂未载入 <button className="soft-button" onClick={()=>setAttempt(n=>n+1)}>重试</button></div>
+        :<p className="empty">{catalog?'暂无图鉴条目。':'正在读取图鉴条目…'}</p>)}
     </div>
     <small className="codex-scroll-hint">滚动浏览 · 点卡片查看完整说明</small>
   </section>;

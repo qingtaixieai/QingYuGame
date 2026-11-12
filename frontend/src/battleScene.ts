@@ -1,5 +1,5 @@
-import {Graphics,type Container} from 'pixi.js';
-import {cellKey,hexShape,sceneActor,sceneLabel,scenePoint} from './SceneCanvas';
+import {Container,Graphics} from 'pixi.js';
+import {battleCaptionLabel,cellKey,hexShape,sceneActor,sceneLabel,scenePoint} from './SceneCanvas';
 import {localActor,localMarker,localRoute,localTerrain,type LocalCell} from './localSceneArt';
 import {drawWorldActor} from './worldArt';
 import type {BattleState,Hex,LootContainer} from './types';
@@ -93,8 +93,10 @@ export function drawBattleOverlay(layer:Container,{actors,relations,visual,loot,
     const relation=actor.accountId===me?'ally':relations?.[actor.accountId]??'neutral';
     const healthColor={hostile:0xe45b4e,neutral:0xe9c64a,ally:0x68ae64}[relation];
     if(max>0&&hp>0)art.roundRect(x-21,y-37,42*Math.min(1,hp/max),6,2).fill(healthColor);
-    sceneLabel(actorLayer,`${actor.username}${actor.accountId===me?' · 你':''}`,x,y-57,12);
-    sceneLabel(actorLayer,`${down?'倒地 ':''}${hp}/${max}`,x,y-45,10);
+    const caption=actorLayer.addChild(new Container({label:battleCaptionLabel}));
+    caption.position.set(x,y-41);
+    sceneLabel(caption,`${actor.username}${actor.accountId===me?' · 你':''}`,0,-16,12);
+    sceneLabel(caption,`${down?'倒地 ':''}${hp}/${max}`,0,-4,10);
     if(actor.withdrawDirection!=null||!actor.online)sceneLabel(actorLayer,actor.withdrawDirection!=null?'正在撤离…':'离线',x,y+27,10, '#765442');
   }
 }

@@ -37,12 +37,6 @@ export const interactionComponents:Record<string,Entry>={
   rest:{name:'旅店休整',description:'休整以恢复生命。',condition:'进入旅店并满足休整条件。',icon:'bed'},
   loot:{name:'遗留物',description:'查看并拾取地上的掉落物。',condition:'到达遗留物所在格。',icon:'bag'},
 };
-export const creatureEntries:Entry[]=[
-  {name:'恶霸',description:'近战怪物，会主动接近旅人。',icon:'monster'},
-  {name:'利爪怪',description:'擅长近身攻击的怪物。',icon:'monster'},
-  {name:'弓箭手',description:'会使用远程武器的怪物。',icon:'bow'},
-];
-
 const neighbors=[{q:1,r:0},{q:0,r:1},{q:-1,r:1},{q:-1,r:0},{q:0,r:-1},{q:1,r:-1}];
 
 /** Stamp a module relative to its anchor. The scene's server-provided cells stay authoritative. */

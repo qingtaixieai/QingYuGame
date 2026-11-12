@@ -36,7 +36,7 @@ public class CharacterService {
         db.update("update characters set timer_end=least(9223372036854775807::numeric,?::numeric+greatest(0,timer_end::numeric-saved_at))::bigint where timer_end>0 and saved_at>0",now);
         db.update("update characters set protected_until=least(9223372036854775807::numeric,?::numeric+greatest(0,protected_until::numeric-saved_at))::bigint where protected_until>saved_at and saved_at>0",now);
         db.update("update characters set saved_at=?",now);
-        var area=roamingArea();if(!area.isEmpty()){var h=area.getFirst();db.update("insert into characters(id,kind,species,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster','bully','恶霸',?,?,12,12,6,6,?,?,?) on conflict(id) do nothing",ISLAND_BEAST,h.q(),h.r(),h.q(),h.r(),now);
+        var area=roamingArea();if(!area.isEmpty()){var h=area.getFirst();db.update("insert into characters(id,kind,species,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster',?,?,?,?,12,12,6,6,?,?,?) on conflict(id) do nothing",ISLAND_BEAST,CharacterSpecies.BULLY.code(),CharacterSpecies.BULLY.name(),h.q(),h.r(),h.q(),h.r(),now);
             if(db.queryForObject("select weapon is null from characters where id=?",Boolean.class,ISLAND_BEAST))kit(ISLAND_BEAST);}
     }
     public void ensurePlayers(){db.update("insert into characters(id,account_id,bind_q,bind_r) select id,id,?,? from accounts on conflict(id) do nothing",world.spawn().q(),world.spawn().r());}
@@ -65,9 +65,9 @@ public class CharacterService {
         }
         give(id,"bandage",rnd.nextInt(3));
     }
-    /** 管理员在固定地点投放一只生物。species：'bully' 恶霸 / 'claw' 利爪怪。投放的怪记为 deployed，死后不重生。 */
+    /** 管理员投放的怪记为 deployed，死后不重生。 */
     public Character deploy(String species,int q,int r,long now){
-        UUID id=UUID.randomUUID();String name=switch(species){case "bully"->"恶霸";case "archer"->"弓箭手";default->"利爪怪";};
+        UUID id=UUID.randomUUID();String name=CharacterSpecies.require(species).name();
         db.update("insert into characters(id,kind,species,deployed,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster',?,true,?,?,?,12,12,6,6,?,?,?)",id,species,name,q,r,q,r,now);
         kit(id);return get(id);
     }

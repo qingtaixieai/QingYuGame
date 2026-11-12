@@ -37,6 +37,8 @@ public class CharacterController {
 
     @GetMapping("/items") public Object items(HttpServletRequest req){accounts.require(req,true,false);return world.catalog();}
 
+    @GetMapping("/creatures") public Object creatures(HttpServletRequest req){accounts.require(req,true,false);return CharacterSpecies.ALL;}
+
     @PostMapping("/equipment") public Object equip(@RequestBody EquipmentRequest body,HttpServletRequest req){var id=accounts.require(req,true,false).id();var main=body.mainHand()!=null||body.offHand()!=null?body.mainHand():body.code();if(Boolean.TRUE.equals(body.updateBody()))world.equip(id,main,body.offHand(),body.body());else world.equip(id,main,body.offHand());return Map.of("message","装备已更新");}
 
     @PostMapping("/character/action") public Object life(@RequestBody LifeRequest body,HttpServletRequest req){world.lifeAction(accounts.require(req,true,false).id(),body.action(),body.targetId());return Map.of("message","行动已处理");}
