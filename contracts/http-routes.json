@@ -82,6 +82,7 @@
     "POST /api/production/cancel",
     "POST /api/production/start",
     "POST /api/register",
+    "POST /api/scene/action",
     "POST /api/scene/cross",
     "POST /api/scene/door",
     "POST /api/scene/enter",
