@@ -19,6 +19,8 @@ public class HotbarService {
     private final BattleService battles;
     private final CombatActions combatActions;
     private final EquipmentService equipment;
+    @org.springframework.beans.factory.annotation.Autowired private SceneRuntime scenes;
+    @org.springframework.beans.factory.annotation.Autowired private SkillPreparation preparations;
     private final JsonMapper json=JsonMapper.builder().build();
     HotbarService(JdbcTemplate db,CharacterService characters,BattleService battles,CombatActions combatActions,EquipmentService equipment){this.db=db;this.characters=characters;this.battles=battles;this.combatActions=combatActions;this.equipment=equipment;}
     private List<Action> owned(UUID id){
@@ -63,7 +65,18 @@ public class HotbarService {
         var available=new ArrayList<Action>();
         var shared=new HashMap<String,BattleService.ActionOption>();battles.actionOptions(id).forEach(o->shared.put(o.definition().id(),o));
         for(var a:actions){
-            if(shared.containsKey(a.id())){var o=shared.get(a.id());available.add(new Action(a.id(),a.source(),a.name(),a.icon(),a.command(),a.description(),a.cost(),a.costKind(),a.quantity(),Objects.requireNonNullElse(o.disabledReason(),"")));continue;}
+            if(a.command().contains("withdraw")&&b.containsKey("sceneId"))continue;
+            if(own==null&&scenes.position(id)!=null){
+                var state=preparations.state(id,System.currentTimeMillis());
+                String name=a.id().equals("skill:fireball")&&state!=SkillPreparation.State.NONE?
+                    state==SkillPreparation.State.READY?"火球术 · 已就绪":"火球术 · 吟唱中":a.name();
+                boolean permitted=Set.of("attack","quick-shot","move","equipment","skill:fireball","potion","antidote","bandage").contains(a.command());
+                String reason=!characters.get(id).alive()?"当前无法行动":!permitted?"此动作需要战斗":
+                    a.id().equals("skill:fireball")&&state==SkillPreparation.State.CHANTING?"正在吟唱":"";
+                available.add(new Action(a.id(),a.source(),name,a.icon(),a.command(),a.description(),0,a.costKind(),a.quantity(),reason));
+                continue;
+            }
+            if(shared.containsKey(a.id())){var o=shared.get(a.id());available.add(new Action(a.id(),a.source(),o.definition().name(),a.icon(),a.command(),a.description(),o.definition().cost(),a.costKind(),a.quantity(),Objects.requireNonNullElse(o.disabledReason(),"")));continue;}
             int cost=a.cost();String reason=common;
             if(own!=null&&a.command().equals("guard"))cost=Math.max(0,Math.min(2-own.reactionPoints(),points));
             if(reason.isEmpty()){

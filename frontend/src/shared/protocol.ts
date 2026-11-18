@@ -18,8 +18,20 @@ export type BattleActor=Hex&{accountId:string;username:string;color:string;initi
 export type BattleIntent=Hex&{kind:'melee'|'aim';ready:boolean;attackerId:string;targetId:string|null;visibility:'public'|'attacker_only';cells:Hex[];damage:number;minRange:number;maxRange:number;moveRule:string;originQ:number|null;originR:number|null};
 export type BattleEvent={details?:Record<string,string|number>;actorName?:string;targetName?:string;amount?:number;blocked?:number;id:number;kind:string;actorId:string|null;targetId:string|null;q:number|null;r:number|null;happenedAt:number};
 export type CombatOption={definition:{id:string;source:string;name:string;effect:string;cost:number;damage:number;description:string};disabledReason:string|null;targets:string[];cells:Hex[]};
-export type BattleState={active:false}|{active:true;relations?:Record<string,'ally'|'neutral'|'hostile'>;sceneId?:string;sceneLevel?:number;blockedEdges?:BlockedEdge[];cells?:import('./scene').SceneCell[];statuses?:Record<string,import('./status').Status[]>;actionOptions:CombatOption[];id:string;worldQ:number;worldR:number;radius:number;round:number;turnAccountId:string;turnPoints:number;turnDeadline:number;attackUsed:boolean;actors:BattleActor[];intents:BattleIntent[];events:BattleEvent[];edges:BattleEdge[];turnStartEdge:boolean};
+export type BattleExitCell={hex:Hex;anchor:Hex|null;directions:number[]};
+export type BattleState={active:false}|{active:true;relations?:Record<string,'ally'|'neutral'|'hostile'>;sceneId?:string;sceneLevel?:number;exitCells?:BattleExitCell[];blockedEdges?:BlockedEdge[];cells?:import('./scene').SceneCell[];statuses?:Record<string,import('./status').Status[]>;actionOptions:CombatOption[];id:string;worldQ:number;worldR:number;radius:number;round:number;turnAccountId:string;turnPoints:number;turnDeadline:number;attackUsed:boolean;actors:BattleActor[];intents:BattleIntent[];events:BattleEvent[];edges:BattleEdge[];turnStartEdge:boolean};
 export type BlockedEdge={from:Hex;to:Hex};
-export type State={production?:import('./production').ProductionState;sceneObjects?:import('./production').SceneObject[];sceneDoors?:import('./scene').SceneDoor[];sceneService?:string|null;scenePosition?:import('./scene').ScenePosition|null;sceneResidents?:import('./scene').SceneResident[];sceneMoving?:boolean;blockedEdges?:BlockedEdge[];character:Character;inventory:Item[];ferry:FerryState|null;type:'state';version:string;players:Player[];tick:number;emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];serverTime:number;battles:BattleSummary[];battleRevision:number};
+export type State={
+  type:'state';version:string;tick:number;serverTime:number;battleRevision:number;
+  character:Character;players:Player[];resources:ResourceNode[];actions:WorldAction[];
+  emotes?:Emote[];battles?:BattleSummary[];inventory?:Item[];ferry?:FerryState|null;
+  loot?:LootContainer[];sceneLoot?:LootContainer[];carriedCorpses?:LootContainer[];
+  sceneEffects?:SceneEffect[];fireballPreparation?:string;blockedEdges?:BlockedEdge[];
+  production?:import('./production').ProductionState|null;
+  sceneObjects?:import('./production').SceneObject[];sceneDoors?:import('./scene').SceneDoor[];
+  sceneService?:string|null;scenePosition?:import('./scene').ScenePosition|null;
+  sceneResidents?:import('./scene').SceneResident[];sceneMoving?:boolean;
+};
 export type BattleEdge=Hex&{cell?:Hex|null;direction:number;name:string;walkable:boolean;battleId:string|null;destination:string};
 export type FerryState=Hex&{wood:number;stone:number;woodNeeded:number;stoneNeeded:number;built:boolean;phase:'mainland'|'outbound'|'island'|'inbound';nextAt:number;dwellMs:number;travelMs:number;mainlandPort:Hex;islandLanding:Hex;route:Hex[];passengerIds:string[]};
+export type SceneEffect=Hex&{id:string;sceneId:string;kind:string;happenedAt:number};

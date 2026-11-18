@@ -22,7 +22,8 @@
 
 .scene-view[hidden]{display:none}
 .game-shell .battle-surface.battle-surface-shared{background:transparent;pointer-events:none}
-.battle-surface-shared>:is(.loot-battle-open,.combat-log,.battle-ammo,.participant-info,.intent-info,.battle-cell-loot,.battle-tools,.action-hotbar,.battle-actions){pointer-events:auto}
+.battle-surface-shared>:is(.combat-log,.participant-info,.intent-info,.battle-cell-loot,.battle-tools,.action-hotbar,.battle-actions),
+.battle-surface-shared .battle-resources>:is(.loot-battle-open,.battle-ammo){pointer-events:auto}
 .battle-surface-shared .battle-grain{display:none}
 .game-shell:has(.scene-view:not([hidden]) .place-actions) .production-progress[data-task-kind='rest']{display:none}
 
@@ -32,12 +33,28 @@
   width:min(34vw,335px); top:calc(var(--top-height,76px) + 4px);
 }
 .battle-surface-shared .initiative-strip{max-width:100%}
-.game-shell .battle-surface-shared .loot-battle-open{top:calc(var(--top-height,76px) + 177px)}
-.game-shell .battle-surface-shared .battle-ammo{top:calc(var(--top-height,76px) + 218px)}
-.game-shell .battle-surface-shared :is(.battle-cell-loot,.intent-info){top:calc(var(--top-height,76px) + 258px)}
+.battle-surface-shared .battle-resources{
+  position:absolute; z-index:5; left:calc(var(--rail-width) + 12px);
+  top:calc(var(--top-height,76px) + 177px);
+  display:flex; flex-wrap:wrap; align-items:start; gap:6px;
+  max-width:min(340px,calc(50vw - var(--rail-width) - 22px)); pointer-events:none;
+}
+.game-shell .battle-surface-shared .battle-resources>:is(.loot-battle-open,.battle-ammo){position:static;}
+.game-shell .battle-surface-shared :is(.battle-cell-loot,.intent-info){top:calc(var(--top-height,76px) + 225px)}
 @media(max-height:600px) and (orientation:landscape){
   .game-shell .battle-surface-shared .initiative-shell{width:min(30vw,250px)}
-  .game-shell .battle-surface-shared .loot-battle-open{top:calc(var(--top-height,42px) + 109px)}
-  .game-shell .battle-surface-shared .battle-ammo{top:calc(var(--top-height,42px) + 143px)}
-  .game-shell .battle-surface-shared :is(.battle-cell-loot,.intent-info){top:calc(var(--top-height,42px) + 172px)}
+  .battle-surface-shared .battle-resources{top:calc(var(--top-height,42px) + 109px)}
+  .game-shell .battle-surface-shared :is(.battle-cell-loot,.intent-info){top:calc(var(--top-height,42px) + 156px)}
+}
+.game-shell .exploration-hotbar{right:max(76px,calc(env(safe-area-inset-right) + 64px));left:calc(var(--scene-ui-left) + 12px);bottom:max(8px,env(safe-area-inset-bottom));}
+@media(max-height:600px) and (orientation:landscape){
+  .game-shell .exploration-hotbar{left:calc(var(--scene-ui-left) + 6px);right:max(65px,calc(env(safe-area-inset-right) + 56px));}
+}
+
+.game-shell .exploration-controls{position:absolute;z-index:4;left:calc(var(--scene-ui-left) + 12px);right:max(76px,calc(env(safe-area-inset-right) + 64px));bottom:max(8px,env(safe-area-inset-bottom));display:grid;justify-items:stretch;row-gap:2px;pointer-events:none}
+.exploration-controls .exploration-toggle{justify-self:center;min-width:44px;min-height:28px;background:#294638;color:#fff7dd;border:1px solid #a2af91;border-radius:6px;pointer-events:auto}
+.game-shell .exploration-controls .exploration-hotbar{position:relative;inset:auto;pointer-events:auto}
+.exploration-controls [hidden]{display:none}
+@media(max-height:600px) and (orientation:landscape){
+ .game-shell .exploration-controls{left:calc(var(--scene-ui-left) + 6px);right:max(65px,calc(env(safe-area-inset-right) + 56px))}
 }

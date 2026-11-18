@@ -22,6 +22,10 @@ public class WorldController {
     record Move(Integer q,Integer r,String version,WorldMap.Hex origin) {}
 
     record SceneCommand(String version,Integer q,Integer r,Integer direction,Boolean adjacent) {}
+    record ExplorationCommand(String version,String action,Integer q,Integer r,UUID requestId) {}
+    @PostMapping("/scene/action") public Object exploration(@RequestBody ExplorationCommand body,HttpServletRequest req){
+        return world.exploreAction(accounts.require(req,true,false).id(),body.version(),body.action(),body.q(),body.r(),body.requestId());
+    }
 
     record FerryRequest(String version,String item,Integer quantity) {}
 
@@ -43,7 +47,7 @@ public class WorldController {
 
     @PostMapping("/scene/move") public Object moveScene(@RequestBody SceneCommand b,HttpServletRequest req){if(b.q()==null||b.r()==null)throw AccountService.bad("请选择格子");return Map.of("path",world.moveScene(accounts.require(req,true,false).id(),b.q(),b.r(),b.version(),Boolean.TRUE.equals(b.adjacent())));}
 
-    @GetMapping("/world") public WorldMap map(HttpServletRequest req){accounts.require(req,true,false);return world.map();}
+    @GetMapping("/world") public WorldMap map(HttpServletRequest req){accounts.require(req,true,false);return world.clientMap();}
 
     @GetMapping("/players") public Map<String,Object> players(HttpServletRequest req){return world.snapshot(accounts.require(req,true,false).id());}
 

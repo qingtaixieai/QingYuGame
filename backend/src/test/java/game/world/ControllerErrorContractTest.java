@@ -10,7 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ControllerErrorContractTest {
     @Test void splitWorldControllerKeepsOriginalMissingAccountMessage() throws Exception {
         var accounts=mock(AccountService.class);var world=mock(WorldService.class);
-        when(world.map()).thenThrow(new EmptyResultDataAccessException(1));
+        when(world.clientMap()).thenThrow(new EmptyResultDataAccessException(1));
         MockMvcBuilders.standaloneSetup(new WorldController(accounts,world))
             .setControllerAdvice(new GameApiErrors(),new ApiErrors()).build()
             .perform(get("/api/world")).andExpect(status().isNotFound())

@@ -86,10 +86,13 @@ def main():
         env['JAVA_HOME']=str(args.java_home.resolve())
         env['PATH']=str(args.java_home.resolve()/'bin')+os.pathsep+env.get('PATH','')
     if args.mode=='local':
+        pure_tests=sorted(path.name for path in (ROOT/'scripts').glob('*.test.mjs'))
+        pure_tests.append('map-gestures-test.mjs')
         for name,cmd,cwd in [
-            ('qa-tests',[sys.executable,'-m','unittest','test_devcheck','-q'],ROOT/'scripts'),
+            ('qa-tests',[sys.executable,'-m','unittest','discover','-s','scripts','-p','test_*.py','-q'],ROOT),
+            ('engineering',[sys.executable,'scripts/engineering_check.py'],ROOT),
             ('frontend',['npm','run','build'],ROOT/'frontend'),
-            ('pure-tests',['node','--experimental-strip-types','--test','battle-inventory.test.mjs','ferry-motion.test.mjs','map-gestures-test.mjs'],ROOT/'scripts'),
+            ('pure-tests',['node','--experimental-strip-types','--test',*pure_tests],ROOT/'scripts'),
             ('backend',['mvn','-B','verify'],ROOT/'backend')]:
             checks.append(run(name,cmd,cwd,out,env=env))
     elif args.mode=='deploy': checks=deployment(args.url,args.dist)

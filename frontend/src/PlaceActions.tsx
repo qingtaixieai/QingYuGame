@@ -6,6 +6,7 @@ import type {ArrangedInteraction} from './cellInteractions';
 type Props={
   title:string;
   subtitle?:string;
+  choices?:ReactNode;
   children?:ReactNode;
   primary?:ReactNode;
   secondary?:ReactNode;
@@ -15,8 +16,8 @@ type Props={
   onToggleDetails?:()=>void;
 };
 
-export function PlaceActions({title,subtitle,children,primary,secondary,onClose,className='',detailsExpanded,onToggleDetails}:Props){
-  const [expanded,setExpanded]=useState(true);
+export function PlaceActions({title,subtitle,choices,children,primary,secondary,onClose,className='',detailsExpanded,onToggleDetails}:Props){
+  const [expanded,setExpanded]=useState(false);
   const showDetails=detailsExpanded??expanded;
   const detailsId=useId();
   const details=Children.toArray(children);
@@ -24,14 +25,15 @@ export function PlaceActions({title,subtitle,children,primary,secondary,onClose,
     <header>
       <div><h3>{title}</h3>{subtitle&&<p aria-live="polite">{subtitle}</p>}</div>
       {details.length>0&&<button type="button" className="place-actions-toggle" aria-controls={detailsId} aria-expanded={showDetails}
-        aria-label={showDetails?'收起地点说明':'展开地点说明'} onClick={onToggleDetails??(()=>setExpanded(value=>!value))}>{showDetails?<ChevronDown size={17}/>:<ChevronUp size={17}/>}</button>}
+        aria-label={showDetails?'收起地点说明':'展开地点说明'} onClick={onToggleDetails??(()=>setExpanded(value=>!value))}>{showDetails?<ChevronUp size={17}/>:<ChevronDown size={17}/>}</button>}
       {onClose&&<button type="button" aria-label="取消选择" onClick={onClose}><X size={17}/></button>}
     </header>
-    {details.length>0&&<div className="place-actions-detail" id={detailsId} hidden={!showDetails}>{details}</div>}
     {(primary||secondary)&&<div className="place-actions-buttons">
       {primary&&<div className="place-actions-primary">{primary}</div>}
       {secondary&&<div className="place-actions-secondary">{secondary}</div>}
     </div>}
+    {choices}
+    {details.length>0&&<div className="place-actions-detail" id={detailsId} hidden={!showDetails}>{details}</div>}
   </section>;
 }
 

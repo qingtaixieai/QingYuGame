@@ -79,8 +79,9 @@ public class TownService {
   for(String kind:List.of("shop","workshop","smith","inn")){
    if(db.queryForObject("select exists(select 1 from town_buildings where outdoor_id=? and kind=?)",Boolean.class,outdoor.id(),kind))continue;
    String name=switch(kind){case "shop"->"商店";case "workshop"->"工坊";case "smith"->"铁匠铺";default->"旅店";};
-   WorldMap.Hex center=null,door=null;
-   for(var candidate:outdoor.cells()){
+   boolean authored=WhiteStoneLayout.applies(outdoor);
+   WorldMap.Hex center=authored?WhiteStoneLayout.centre(kind):null,door=authored?WhiteStoneLayout.door(kind):null;
+   if(!authored)for(var candidate:outdoor.cells()){
     var h=candidate.hex();if(WorldMap.distance(h,new WorldMap.Hex(0,0))>outdoor.radius()-4)continue;
     var footprint=new HashSet<>(h.neighbors());footprint.add(h);
     if(footprint.stream().anyMatch(reserved::contains)||footprint.stream().anyMatch(f->cells.stream().noneMatch(c->c.hex().equals(f)&&c.walkable())))continue;
@@ -88,8 +89,10 @@ public class TownService {
     if(!connected(remaining,outdoor.blockedEdges()))continue;center=h;door=entry;reserved.addAll(footprint);break;
    }
    if(center==null)throw AccountService.bad("此城镇暂时没有合法建筑空间");
-   var footprint=new HashSet<>(center.neighbors());footprint.add(center);var entry=door;
-   cells.replaceAll(c->footprint.contains(c.hex())?new SceneMap.Cell(c.q(),c.r(),c.hex().equals(entry)?"paving":"wall",c.hex().equals(entry)):c);
+   if(!authored){
+    var footprint=new HashSet<>(center.neighbors());footprint.add(center);var entry=door;
+    cells.replaceAll(c->footprint.contains(c.hex())?new SceneMap.Cell(c.q(),c.r(),c.hex().equals(entry)?"paving":"wall",c.hex().equals(entry)):c);
+   }
    UUID roomId=id(outdoor.id()+":"+kind);int radius=Set.of("workshop","smith").contains(kind)?5:4;var removed=new WorldMap.Hex(0,radius);var insideDoor=new WorldMap.Hex(0,radius-1);
    var base=SceneMap.room(roomId,world.version(),outdoor.owner(),tile.place().name()+" · "+name,radius);
    var room=new SceneMap(roomId,world.version(),2,3,outdoor.owner(),base.name(),radius,base.cells().stream().filter(c->!c.hex().equals(removed)).map(c->WorldMap.distance(c.hex(),new WorldMap.Hex(0,0))==radius?new SceneMap.Cell(c.q(),c.r(),"wall",false):c).toList());scenes.save(room);

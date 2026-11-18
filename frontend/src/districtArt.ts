@@ -1,11 +1,72 @@
-import {Graphics,type Container} from 'pixi.js';
+import {Assets,Graphics,Rectangle,Sprite,Texture,type Container} from 'pixi.js';
 import {scenePoint} from './SceneCanvas';
 import {drawTerrainProp,pixel,tree} from './worldArt';
 import {HEX_SCENE,paintGround} from './mapPaint';
 import {sceneKey} from './sceneGeometry';
-import {innPixels,townPixels} from './districtSprites';
+import {innPixels} from './districtSprites';
 import type {LocalCell} from './localSceneArt';
 import type {BlockedEdge,Hex} from './types';
+import whiteStoneAtlasUrl from './assets/white-stone-atlas.png';
+
+const whiteStoneFrames={
+  inn:[20,66,375,323], shop:[403,113,305,270], workshop:[726,100,337,282], smith:[1084,64,330,326],
+  tree:[58,416,275,290], pine:[403,401,288,305], well:[744,429,296,283], stall:[1112,405,277,303],
+  fence:[54,817,265,160], flowers:[419,790,256,196], lantern:[807,753,168,257], shrub:[1100,800,277,185],
+} as const;
+type WhiteStoneSprite=keyof typeof whiteStoneFrames;
+type WhiteStoneAtlas=Record<WhiteStoneSprite,Texture>;
+let whiteStoneAtlas:Promise<WhiteStoneAtlas>|undefined;
+
+export function loadWhiteStoneAtlas(){
+  whiteStoneAtlas??=Assets.load<Texture>(whiteStoneAtlasUrl).then(atlas=>{
+    atlas.source.scaleMode='nearest';
+    return Object.fromEntries(Object.entries(whiteStoneFrames).map(([key,[x,y,width,height]])=>[
+      key,new Texture({source:atlas.source,frame:new Rectangle(x,y,width,height)}),
+    ])) as WhiteStoneAtlas;
+  }).catch(error=>{whiteStoneAtlas=undefined;throw error;});
+  return whiteStoneAtlas;
+}
+
+function whiteStoneSprite(layer:Container,atlas:WhiteStoneAtlas,kind:WhiteStoneSprite,cell:Hex,width:number,dx=0,dy=0){
+  const texture=atlas[kind],sprite=new Sprite(texture),point=scenePoint(cell);
+  sprite.anchor.set(.5,1);
+  sprite.position.set(Math.round(point.x+dx),Math.round(point.y+dy));
+  sprite.width=width;
+  sprite.height=width*texture.height/texture.width;
+  layer.addChild(sprite);
+  return sprite;
+}
+
+export function drawWhiteStoneTown(layer:Container,atlas:WhiteStoneAtlas,cells:LocalCell[],doors:readonly {cell:Hex;name:string}[],edges:readonly BlockedEdge[]){
+  const doorKinds:Record<string,WhiteStoneSprite>={旅店:'inn',商店:'shop',工坊:'workshop',铁匠铺:'smith'};
+  const index=new Map(cells.map(cell=>[sceneKey(cell),cell]));
+  for(const door of doors){
+    const name=door.name.split(' · ').at(-1)??door.name;
+    whiteStoneSprite(layer,atlas,doorKinds[name]??'workshop',door.cell,name==='旅店'?158:134,0,-15);
+    whiteStoneSprite(layer,atlas,'flowers',door.cell,26,29,-7);
+  }
+  whiteStoneSprite(layer,atlas,'well',{q:0,r:0},58,0,22);
+  for(const [q,r] of [[-3,5],[3,2],[-3,-1],[4,-5],[-6,7],[4,4],[6,-5],[-3,-7],[7,2],[-4,9],[3,8],[-3,12],[4,10],[-4,14]]){
+    const cell=index.get(sceneKey({q,r}));
+    if(!cell?.walkable||!['grass','forest'].includes(cell.terrain))continue;
+    whiteStoneSprite(layer,atlas,q<0?'tree':'pine',cell,58,0,8);
+  }
+  whiteStoneSprite(layer,atlas,'stall',{q:-3,r:3},52,0,18);
+  for(const {from,to} of edges){
+    const a=scenePoint(from),b=scenePoint(to);
+    const fence=whiteStoneSprite(layer,atlas,'fence',from,36,(b.x-a.x)/2,(b.y-a.y)/2);
+    fence.anchor.set(.5);
+    fence.rotation=Math.atan2(b.y-a.y,b.x-a.x)+Math.PI/2;
+  }
+  for(const [q,r] of [[-1,6],[1,7],[-3,-1],[3,-2]]){
+    const cell=index.get(sceneKey({q,r}));
+    if(cell?.walkable)whiteStoneSprite(layer,atlas,'lantern',cell,14,25,12);
+  }
+  for(const [q,r] of [[-2,8],[2,7],[-5,6],[6,-2]]){
+    const cell=index.get(sceneKey({q,r}));
+    if(cell?.walkable&&cell.terrain==='grass')whiteStoneSprite(layer,atlas,'shrub',cell,32,0,11);
+  }
+}
 
 function paint(g:Graphics,rows:readonly string[],palette:Readonly<Record<string,string>>,x:number,y:number,scale:number){
   for(let r=0;r<rows.length;r++){
@@ -19,15 +80,40 @@ function paint(g:Graphics,rows:readonly string[],palette:Readonly<Record<string,
   }
 }
 
-const buildings:Record<string,readonly string[]>={旅店:townPixels.inn,商店:townPixels.shop,工坊:townPixels.workshop,铁匠铺:townPixels.smith};
+const roofs:Record<string,{width:number;deep:number;shadow:number;tile:number;light:number}>={
+  旅店:{width:120,deep:108,shadow:0x875245,tile:0xb46954,light:0xce8368},
+  商店:{width:100,deep:83,shadow:0x52626a,tile:0x6d8187,light:0x8d9ca0},
+  工坊:{width:96,deep:80,shadow:0x85634f,tile:0xad835e,light:0xcaa079},
+  铁匠铺:{width:106,deep:86,shadow:0x49575e,tile:0x65747a,light:0x839299},
+};
 
 export function drawDistrictBuilding(layer:Container,door:Hex,name:string){
   const {x,y}=scenePoint(door),kind=name.split(' · ').at(-1)??name;
-  const rows=buildings[kind]??townPixels.workshop;
+  const roof=roofs[kind]??roofs.工坊;
   const g=new Graphics();
-  pixel(g,x-50,y-22,100,15,0x9e9670);
-  pixel(g,x-42,y-12,84,7,0xb1a789);
-  paint(g,rows,townPixels.palette,x-48,y-15-rows.length*8,8);
+  const left=Math.round(x-roof.width/2),right=left+roof.width,bottom=Math.round(y-24),top=bottom-roof.deep;
+  const ridge=Math.floor((top+bottom)/2),hip=24;
+  pixel(g,left+5,top+7,roof.width+7,roof.deep+5,0x9a8e66);
+  pixel(g,left-3,top-3,roof.width+6,roof.deep+6,0x574e47);
+  pixel(g,left,top,roof.width,roof.deep,roof.shadow);
+  for(let row=top;row<bottom;row+=6){
+    const slope=row<ridge?roof.tile:roof.light;
+    const inset=Math.floor(hip*(1-Math.min(1,Math.abs(row-ridge)/(roof.deep/2))));
+    const start=left+inset,end=right-inset;
+    pixel(g,start,row,end-start,Math.min(5,bottom-row),slope);
+    for(let joint=start+(Math.floor((row-top)/6)%2===0?9:4);joint<end;joint+=12){
+      pixel(g,joint,row,1,Math.min(4,bottom-row),roof.shadow);
+    }
+    pixel(g,start,row,2,Math.min(5,bottom-row),roof.light);
+    pixel(g,end-2,row,2,Math.min(5,bottom-row),roof.light);
+  }
+  pixel(g,left+hip,ridge-2,roof.width-hip*2,4,roof.shadow);
+  pixel(g,left+hip,ridge-2,roof.width-hip*2,1,roof.light);
+  pixel(g,right-26,top+15,14,15,0xb6a887);
+  pixel(g,right-25,top+15,12,11,0xe9d8ad);
+  pixel(g,right-22,top+17,6,5,0x695c4e);
+  pixel(g,x-12,bottom+4,24,5,0xb0a080);
+  pixel(g,x-10,bottom+9,20,3,0xdbcca6);
   layer.addChild(g);
 }
 
@@ -77,12 +163,34 @@ function drawPlazaMark(g:Graphics,x:number,y:number){
   pixel(g,x-4,y+2,9,2,0x80aaa0);
 }
 
+function drawStonePaving(g:Graphics,x:number,y:number,seed:number){
+  for(let row=-24;row<=24;row+=12){
+    const extent=Math.floor(32-(Math.abs(row)+6)/Math.sqrt(3));
+    for(let left=-extent+((row+24)/12%2)*7;left<extent-5;left+=15){
+      const wide=Math.min(13,extent-left),tone=(seed+left+row)&3;
+      shade(g,x+left,y+row,wide,9,tone===0?0xaaa186:0xece0bd,.38);
+      shade(g,x+left+1,y+row+8,wide-1,1,0x9f967d,.41);
+    }
+  }
+}
+
+function drawTownCanopy(g:Graphics,x:number,y:number,seed:number){
+  const palette=seed%2===0?[0x64844d,0x87a05c,0xa6b973]:[0x537957,0x739664,0x99b575];
+  shade(g,x-19,y-10,40,25,0x516346,.26);
+  for(const [dx,dy,w,h] of [[-20,-12,38,26],[-13,-19,25,37],[-23,-5,43,14]])pixel(g,x+dx,y+dy,w,h,palette[0]);
+  for(const [dx,dy,w,h] of [[-18,-12,24,20],[-12,-17,21,26],[-6,-9,24,19]])pixel(g,x+dx,y+dy,w,h,palette[1]);
+  pixel(g,x-10,y-13,13,8,palette[2]);
+  pixel(g,x-17,y-7,8,7,palette[2]);
+  pixel(g,x+5,y-6,9,6,palette[2]);
+}
+
 function drawTown(g:Graphics,cells:LocalCell[]){
   for(const cell of cells){
     const {x,y}=scenePoint(cell),n=seed(cell);
     if(cell.terrain==='street'||cell.terrain==='plaza'){
       const stone=cell.terrain==='plaza'?0xaaa186:0x9f977b;
-      if(cell.terrain==='plaza'||n%3!==1){
+      if(cell.terrain==='plaza')drawStonePaving(g,x,y,n);
+      else if(n%3!==1){
         for(const [dx,dy,w] of [[-19,-10,16],[3,6,18],[-13,17,12]]){
           const shift=(n>>>5)%9;
           shade(g,x+dx+shift,y+dy,w,2,stone,.65);
@@ -102,7 +210,9 @@ function drawTown(g:Graphics,cells:LocalCell[]){
         shade(g,x+3,y+11,14,2,0x7b795e,.6);
       }
     }else if(cell.art==='town-edge'){
-      if(n%7===0){
+      if(n%10===1){
+        drawTownCanopy(g,x,y,n);
+      }else if(n%7===0){
         pixel(g,x-16,y+2,13,5,0x899869);
         pixel(g,x-13,y-1,9,3,0xa5aa80);
         pixel(g,x+3,y+10,7,3,0x899869);

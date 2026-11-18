@@ -28,9 +28,9 @@ export const MapView=memo(function MapView(props:Props){
       if(disposed||!host.current){app.destroy(true,{children:true});return;}
       application.current=app;
       host.current!.appendChild(app.canvas);
-      const scene=new Container(),ground=new Graphics(),roads=new Graphics(),decor=new Graphics(),markers=new Container(),selection=new Graphics(),routeLine=new Graphics(),actors=new Container();
+      const scene=new Container(),ground=new Graphics(),roads=new Graphics(),decor=new Graphics(),markers=new Container(),selection=new Graphics(),hoverOutline=new Graphics(),routeLine=new Graphics(),actors=new Container();
       app.stage.addChild(scene);const resourceLayer=new Container(),effects=new Container(),battleMarks=new Container();
-      scene.addChild(ground,roads,decor,resourceLayer,markers,battleMarks,routeLine,selection,actors,effects);
+      scene.addChild(ground,roads,decor,resourceLayer,markers,battleMarks,routeLine,selection,hoverOutline,actors,effects);
       const passageMarks=new Graphics();scene.addChild(passageMarks);let passageSignature='';
       const lootLayer=new Container();scene.addChild(lootLayer);let lootSignature='';
       const interactionLayer=new Container();scene.addChild(interactionLayer);
@@ -75,15 +75,35 @@ export const MapView=memo(function MapView(props:Props){
       fit();
       if(window.matchMedia('(max-height:600px) and (orientation:landscape)').matches){const h=props.players.find(p=>p.id===props.me)||map.spawn;props.controls.current?.locate(h);}
       const canvas=app.canvas;
-      const unbind=bindMapGestures(canvas,{pan:(dx,dy)=>{scene.x+=dx;scene.y+=dy;},zoom:zoomAt,tap:(x,y)=>{
+      function pointCell(x:number,y:number){
         const local=scene.toLocal({x,y});const rf=local.y/(1.5*SIZE),qf=local.x/(SQRT3*SIZE)-rf/2;
         let q=Math.round(qf),r=Math.round(rf),s=Math.round(-qf-rf);const dq=Math.abs(q-qf),dr=Math.abs(r-rf),ds=Math.abs(s+qf+rf);
         if(dq>dr&&dq>ds)q=-r-s;else if(dr>ds)r=-q-s;
         const hit=hitInteraction(latest.current.interactions,local,position);
-        const tile=index.get(hit?key(hit.cell):`${q},${r}`);
+        return {tile:index.get(hit?key(hit.cell):`${q},${r}`),hit};
+      }
+      let hovered:Tile|undefined;
+      function showHover(tile?:Tile){
+        if(hovered===tile)return;
+        hovered=tile;
+        hoverOutline.clear();
+        if(tile){
+          const p=position(tile);
+          hex(hoverOutline,p.x,p.y,SIZE-1).fill({color:0xfff5c7,alpha:.24}).stroke({color:0xfff8d6,width:2});
+        }
+      }
+      function pointerMove(e:PointerEvent){
+        const box=canvas.getBoundingClientRect();
+        showHover(e.buttons||e.pointerType==='touch'?undefined:pointCell(e.clientX-box.left,e.clientY-box.top).tile);
+      }
+      const pointerLeave=()=>showHover();
+      canvas.addEventListener('pointermove',pointerMove);
+      canvas.addEventListener('pointerleave',pointerLeave);
+      const unbind=bindMapGestures(canvas,{pan:(dx,dy)=>{showHover();scene.x+=dx;scene.y+=dy;},zoom:(...args)=>{showHover();zoomAt(...args);},tap:(x,y)=>{
+        const {tile,hit}=pointCell(x,y);
         if(tile)latest.current.onSelect(tile,hit?.id);
       }});
-      function wheel(e:WheelEvent){e.preventDefault();const rect=canvas.getBoundingClientRect();zoomAt(Math.exp(-e.deltaY*.0012),e.clientX-rect.left,e.clientY-rect.top);}
+      function wheel(e:WheelEvent){e.preventDefault();showHover();const rect=canvas.getBoundingClientRect();zoomAt(Math.exp(-e.deltaY*.0012),e.clientX-rect.left,e.clientY-rect.top);}
       canvas.style.cursor='grab';canvas.style.touchAction='none';canvas.addEventListener('wheel',wheel,{passive:false});
       const entities=new Map<string,{container:Container;body:Graphics;bar:Graphics;barPixels:number;bubble:Graphics;emoteCode:string;label:Text;battleTag:Text;target:{x:number;y:number};color:string;online:boolean;inBattle:boolean}>();
       let previousPlayers:Player[]|null=null,previousSelected:Tile|null|undefined,previousRoute:Hex[]|null=null;
@@ -199,7 +219,7 @@ export const MapView=memo(function MapView(props:Props){
       });
       const resize=new ResizeObserver(()=>{if(disposed||!host.current)return;const w=host.current.clientWidth,h=host.current!.clientHeight,dx=w-app.screen.width,dy=h-app.screen.height,wasFit=Math.abs(zoom-fitScale)<.001;app.renderer.resize(w,h);if(wasFit)fit();else{fitScale=Math.min(w/mapWidth,h/mapHeight);scene.x+=dx/2;scene.y+=dy/2;report();}});resize.observe(host.current!);
       if(!latest.current.active)app.ticker.stop();
-      cleanup=()=>{resize.disconnect();canvas.removeEventListener('wheel',wheel);unbind();props.controls.current=null;application.current=null;app.destroy(true,{children:true});};
+      cleanup=()=>{resize.disconnect();canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerleave',pointerLeave);unbind();props.controls.current=null;application.current=null;app.destroy(true,{children:true});};
     }
     init().catch(e=>{console.error(e);if(host.current)host.current.innerHTML='<div class="map-error">画面初始化失败，请开启浏览器硬件加速后刷新。</div>';});
     return()=>{disposed=true;cleanup();};

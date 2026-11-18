@@ -7,6 +7,7 @@ import java.util.*;
 /** Item definitions live in data; ownership and slot changes remain server-authoritative. */
 @Service
 public class EquipmentService {
+    int armorPiercing(String code){return db.queryForObject("select coalesce((select armor_piercing from item_definitions where code=?),0)",Integer.class,code);}
     private final JdbcTemplate db;
     EquipmentService(JdbcTemplate db){this.db=db;}
     public record Item(String code,String name,String description,String kind,String handUsage,int passiveArmor,int guardReduction,int guardMinDamage,boolean grantsAttack) {}

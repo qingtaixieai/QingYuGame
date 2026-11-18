@@ -29,7 +29,7 @@ public class CombatActions {
         if(equipment.has(actor,"healing_potion"))out.add(new Definition("potion","item","治疗药水","heal_self",1,6,0,0,"healing_potion","恢复自身6点生命。"));
         if(equipment.has(actor,"antidote"))out.add(new Definition("antidote","item","解毒药","cure_self",1,0,0,0,"antidote","清除自身中毒，不恢复生命。"));
         if(equipment.has(actor,"stone"))out.add(new Definition("throw-stone","item","投掷石头","projectile",2,2,1,2,"stone","消耗一块石头，立即攻击两格内的一名角色。"));
-        for(var s:skills.learned(actor))out.add(new Definition("skill:"+s.code(),"skill",s.name(),s.effect(),s.cost(),0,s.minRange(),s.maxRange(),null,s.description()));
+        for(var s:skills.learned(actor))out.add(new Definition("skill:"+s.code(),s.code().equals(SkillPreparation.FIREBALL)?"spell":"skill",s.name(),s.effect(),s.cost(),0,s.minRange(),s.maxRange(),null,s.description()));
         return List.copyOf(out);
     }
 }

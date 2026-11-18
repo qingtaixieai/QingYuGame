@@ -20,6 +20,182 @@ class ProductionIntegrationTest {
  @Autowired WorldService world;@Autowired ProductionService work;@Autowired EquipmentService equipment;@Autowired JdbcTemplate db;@Autowired PlatformTransactionManager manager;
  @Autowired SceneRuntime runtime;@Autowired CharacterService characters;@Autowired LootService loot;@Autowired ShopService shop;@Autowired BattleService battles;@Autowired SceneService scenes;
  @BeforeEach void reset(){synchronized(world){db.update("delete from production_tasks");battles.reset();db.update("delete from scene_portals");db.update("delete from scene_documents");scenes.refresh();db.update("update accounts set entered=false");db.update("update characters set next_move=? where kind<>'player'",Long.MAX_VALUE);}}
+ @Autowired SkillService skills;
+ @Autowired SkillPreparation preparations;
+ @Test void explorationAttackOnlyStartsOnRecipientAndReplaysOnce(){synchronized(world){
+  UUID caster=actor(),target=actor(),bystander=actor();
+  local(caster);
+  var local=runtime.position(caster);
+  var version=world.map().version();
+  characters.relocate(target,characters.get(caster).q(),characters.get(caster).r());
+  characters.relocate(bystander,characters.get(caster).q(),characters.get(caster).r());
+  var origin=new WorldMap.Hex(0,0);
+  var hit=new WorldMap.Hex(1,0);
+  runtime.put(caster,local.sceneId(),origin);
+  runtime.put(target,local.sceneId(),hit);
+  runtime.put(bystander,local.sceneId(),new WorldMap.Hex(3,0));
+  int before=characters.get(target).hp();
+  var miss=UUID.randomUUID();
+  world.exploreAction(caster,version,"attack",0,1,miss);
+  assertFalse(battles.engaged(caster));
+  assertEquals(before,characters.get(target).hp());
+  db.update("update characters set protected_until=? where id=?",System.currentTimeMillis()+60000,target);
+  world.exploreAction(caster,version,"attack",hit.q(),hit.r(),UUID.randomUUID());
+  assertEquals(before,characters.get(target).hp());
+  assertFalse(battles.engaged(caster));
+  db.update("update characters set protected_until=0 where id=?",target);
+  var contact=UUID.randomUUID();
+  world.exploreAction(caster,version,"attack",hit.q(),hit.r(),contact);
+  var damage=characters.get(target).hp();
+  assertTrue(damage<before);
+  assertTrue(battles.engaged(caster));
+  assertTrue(battles.engaged(target));
+  assertFalse(battles.engaged(bystander));
+  assertEquals(6,battles.current(caster,Set.of(caster,target)).get("turnPoints"));
+  world.exploreAction(caster,version,"attack",hit.q(),hit.r(),contact);
+  assertEquals(damage,characters.get(target).hp());
+  var conflict=assertThrows(org.springframework.web.server.ResponseStatusException.class,
+      ()->world.exploreAction(caster,version,"attack",0,1,contact));
+  assertEquals("动作编号已用于不同请求",conflict.getReason());
+ }}
+ @Test void failedExplorationRequestCanRetryAndOldReceiptsStillReplay(){synchronized(world){
+  UUID caster=actor();local(caster);
+  var p=runtime.position(caster);runtime.put(caster,p.sceneId(),new WorldMap.Hex(0,0));
+  var version=world.map().version();
+  var request=UUID.randomUUID();
+  var before=world.snapshot(caster).get("battleRevision");
+  assertThrows(RuntimeException.class,()->world.exploreAction(caster,version,"attack",25,0,request));
+  assertEquals(0,db.queryForObject("select count(*) from scene_action_receipts where actor_id=? and request_id=?",Integer.class,caster,request));
+  assertEquals(before,world.snapshot(caster).get("battleRevision"));
+  assertNotNull(world.exploreAction(caster,version,"attack",1,0,request));
+  var old=UUID.randomUUID();
+  db.update("insert into scene_action_receipts(actor_id,request_id,created_at) values(?,?,?)",caster,old,System.currentTimeMillis());
+  var revision=world.snapshot(caster).get("battleRevision");
+  assertEquals(Map.of("preparation","NONE","battle",false),world.exploreAction(caster,version,"attack",25,0,old));
+  assertEquals(revision,world.snapshot(caster).get("battleRevision"));
+ }}
+ @Autowired BattleExploration exploration;
+ @Test void explorationFireballIsReadyAfterThreeSeconds(){synchronized(world){
+  var caster=actor();
+  local(caster);
+  var position=runtime.position(caster);
+  long now=System.currentTimeMillis();
+  tx().executeWithoutResult(status->{
+   skills.set(caster,"fireball",true);
+   exploration.act(caster,position,"skill:fireball",null,null,now);
+   assertEquals(SkillPreparation.State.CHANTING,preparations.state(caster,now+2999));
+   assertEquals(SkillPreparation.State.READY,preparations.state(caster,now+3000));
+   assertFalse(preparations.interrupt(caster,now+3000));
+  });
+ }}
+ @Autowired SceneLoggingCamp camps;
+ @Test void loggingCampUsesOneSharedChestAndRestocksOnlyAfterLeaving(){synchronized(world){
+  UUID first=actor(),second=actor();
+  var map=world.map();
+  var site=SceneLoggingCamp.site(map).orElseThrow();
+  assertEquals(SceneLoggingCamp.NAME,world.clientMap().index().get(site).place().name());
+  for(UUID player:List.of(first,second)){
+   characters.relocate(player,site.q(),site.r());
+   world.enterScene(player,map.version());
+  }
+  var location=runtime.position(first);
+  assertEquals(location.sceneId(),runtime.position(second).sceneId());
+  var campsite=runtime.map(location.sceneId());
+  var chest=db.queryForObject("select chest_id from scene_logging_camps where scene_id=?",UUID.class,campsite.id());
+  var monster=db.queryForObject("select monster_id from scene_logging_camps where scene_id=?",UUID.class,campsite.id());
+  assertTrue(campsite.topology().connected(location.hex(),SceneLoggingCamp.CHEST,Set.copyOf(SceneLoggingCamp.PATROL)));
+  assertTrue(campsite.topology().connected(SceneLoggingCamp.PATROL.getFirst(),SceneLoggingCamp.CHEST,Set.of()));
+  var take=new LootService.Command("takeAll",chest,null,null,map.version(),null,null);
+  assertThrows(RuntimeException.class,()->world.lootCommand(first,take));
+  runtime.put(first,campsite.id(),SceneLoggingCamp.CHEST);
+  world.lootCommand(first,take);
+  assertEquals(2,equipment.available(first,SceneLoggingCamp.MATERIAL));
+  runtime.leave(first);
+  runtime.put(second,campsite.id(),SceneLoggingCamp.CHEST);
+  assertThrows(RuntimeException.class,()->world.lootCommand(second,take));
+  long restock=db.queryForObject("select restock_at from scene_logging_camps where scene_id=?",Long.class,campsite.id());
+  tx().executeWithoutResult(status->camps.advance(runtime,Set.of(second),Set.of(),restock+1));
+  assertEquals(0,equipment.available(second,SceneLoggingCamp.MATERIAL));
+  assertEquals(0L,db.queryForObject("select count(*) from loot_items where container_id=?",Long.class,chest));
+  runtime.leave(second);
+  tx().executeWithoutResult(status->{
+   characters.die(monster,restock-1);
+   db.update("update characters set timer_end=? where id=?",restock,monster);
+   camps.advance(runtime,Set.of(),Set.of(),restock+1);
+  });
+  assertTrue(characters.get(monster).alive());
+  world.enterScene(second,map.version());
+  runtime.put(second,campsite.id(),SceneLoggingCamp.CHEST);
+  world.lootCommand(second,take);
+  assertEquals(2,equipment.available(second,SceneLoggingCamp.MATERIAL));
+  assertEquals(monster,db.queryForObject("select monster_id from scene_logging_camps where scene_id=?",UUID.class,campsite.id()));
+  var town=map.tiles().stream().filter(tile->tile.place()!=null&&tile.place().type().equals("town")).findFirst().orElseThrow().hex();
+  runtime.leave(second);
+  characters.relocate(second,town.q(),town.r());
+  world.enterScene(second,map.version());
+  UUID workshop=db.queryForObject("select id from town_buildings where outdoor_id=? and kind='workshop'",UUID.class,runtime.position(second).sceneId());
+  runtime.put(second,workshop,new WorldMap.Hex(0,2));
+  var bench=object(second,"workbench");
+  var benchCell=new WorldMap.Hex(((Number)bench.get("q")).intValue(),((Number)bench.get("r")).intValue());
+  var standing=benchCell.neighbors().stream().filter(h->runtime.map(workshop).cells().stream().anyMatch(c->c.hex().equals(h)&&c.walkable())).findFirst().orElseThrow();
+  runtime.put(second,workshop,standing);
+  give(second,"arrow",5);
+  long craftAt=System.currentTimeMillis();
+  tx().executeWithoutResult(status->{
+   work.start(second,map,new ProductionService.Start("craft","poison_arrow",1,(UUID)bench.get("id"),null),craftAt);
+   work.advance(craftAt+5000);
+  });
+  assertEquals(5,equipment.available(second,"poison_arrow"));
+  assertEquals(1,equipment.available(second,SceneLoggingCamp.MATERIAL));
+  assertEquals(0,equipment.available(second,"arrow"));
+ }}
+ @Test void fireballChantsThroughEndTurnAndSpendsReadyChargeOnEmptyCell(){synchronized(world){
+  UUID caster=actor(),other=actor();
+  local(caster);
+  var from=characters.get(caster);
+  characters.relocate(other,from.q(),from.r());
+  world.enterScene(other,world.map().version());
+  UUID battle=world.startBattle(caster,other,world.map().version());
+  var scene=runtime.map(runtime.position(caster).sceneId());
+  var home=runtime.position(caster).hex();
+  var occupied=runtime.position(other).hex();
+  var empty=scene.cells().stream().map(SceneMap.Cell::hex)
+      .filter(h->!h.equals(home)&&!h.equals(occupied)&&WorldMap.distance(home,h)<=6).findFirst().orElseThrow();
+  long now=System.currentTimeMillis();
+  var online=Set.of(caster,other);
+  tx().executeWithoutResult(s->{
+   skills.set(caster,"fireball",true);
+   db.update("update battle_encounters set turn_account_id=?,turn_points=6 where id=?",caster,battle);
+   battles.action(caster,"skill:fireball",null,null,null,online,now);
+   assertEquals(SkillPreparation.State.CHANTING,preparations.state(caster,now));
+   assertEquals(4,db.queryForObject("select turn_points from battle_encounters where id=?",Integer.class,battle));
+   battles.endTurn(caster,online,now);
+   battles.endTurn(other,online,now+1);
+   assertEquals(SkillPreparation.State.READY,preparations.state(caster,now+1));
+   battles.action(caster,"skill:fireball",null,empty.q(),empty.r(),online,now+2);
+   assertEquals(SkillPreparation.State.NONE,preparations.state(caster,now+2));
+   assertEquals(6,db.queryForObject("select turn_points from battle_encounters where id=?",Integer.class,battle));
+   assertEquals(1,db.queryForObject("select count(*) from battle_events where encounter_id=? and kind='meteor'",Integer.class,battle));
+  });
+ }}
+ @Test void townResourcesAreSpreadAndAvoidTheCentralStreets(){synchronized(world){
+  var map=world.map();
+  var town=map.tiles().stream().filter(t->t.place()!=null&&t.place().type().equals("town")).findFirst().orElseThrow();
+  var scene=tx().execute(s->runtime.outdoor(map,town.hex()));
+  var nodes=db.query("select q,r from scene_objects where scene_id=? and kind='resource'",(rs,n)->new WorldMap.Hex(rs.getInt(1),rs.getInt(2)),scene.id());
+  assertFalse(nodes.isEmpty());
+  assertTrue(nodes.stream().map(WorldMap.Hex::q).distinct().count()>1,nodes.toString());
+  for(var node:nodes){
+   var tile=scene.cells().stream().filter(c->c.hex().equals(node)).findFirst().orElseThrow();
+   assertTrue(tile.walkable()&&!Set.of("paving","street","plaza").contains(tile.terrain()));
+   assertTrue(WorldMap.distance(node,new WorldMap.Hex(0,0))>=5);
+  }
+  var before=db.queryForList("select * from scene_objects where scene_id=? order by id",scene.id());
+  db.update("update production_scene_content set version=1 where scene_id=?",scene.id());
+  tx().execute(s->runtime.outdoor(map,town.hex()));
+  assertEquals(before,db.queryForList("select * from scene_objects where scene_id=? order by id",scene.id()));
+  assertEquals(2,db.queryForObject("select version from production_scene_content where scene_id=?",Integer.class,scene.id()));
+ }}
  @Test void pickaxeAttackIgnoresOneArmorThroughSharedBattleAction(){synchronized(world){
   var a=actor();local(a);var b=actor();var c=characters.get(a);characters.relocate(b,c.q(),c.r());world.enterScene(b,world.map().version());equip(a,"pickaxe");give(b,"light_armor",1);tx().executeWithoutResult(s->equipment.equip(b,null,null,"light_armor"));
   var map=runtime.map(runtime.position(a).sceneId());tx().executeWithoutResult(s->{scenes.save(new SceneMap(map.id(),map.worldVersion(),map.generationVersion(),2,map.owner(),map.name(),map.radius(),map.cells().stream().map(h->Math.abs(h.q())<=1&&h.r()==0?new SceneMap.Cell(h.q(),h.r(),h.terrain(),true):h).toList()));runtime.put(a,map.id(),new WorldMap.Hex(0,0));runtime.put(b,map.id(),new WorldMap.Hex(1,0));});

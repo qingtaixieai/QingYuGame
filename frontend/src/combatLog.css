@@ -11,3 +11,8 @@
 .aim-zone{fill:#e6bc4720;stroke:#e1b354;stroke-width:2;stroke-dasharray:5 4;pointer-events:none}
 @keyframes combat-rise{0%{opacity:0;transform:translateY(0)}15%{opacity:1}100%{opacity:0;transform:translateY(-42px)}}
 @media(max-height:600px) and (orientation:landscape){.combat-log{top:90px;right:8px;font-size:11px;max-width:42vw}.combat-log section{padding:7px}.combat-log ol{max-height:32vh}.combat-log>button{padding:4px 8px}}
+
+.journey-log{flex:1;min-height:0;overflow:auto;padding:10px 14px;color:#405745}
+.journey-log ol{margin:8px 0;padding-left:16px}
+.journey-log li{padding:5px 0;font-size:12px;border-bottom:1px solid #dbe2d2}
+.journey-log time{color:#667666;font-variant-numeric:tabular-nums}

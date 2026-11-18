@@ -14,6 +14,14 @@ public class SceneRuntime {
     @org.springframework.beans.factory.annotation.Autowired private SceneContentService content;
     @org.springframework.beans.factory.annotation.Autowired private TownService towns;
     @org.springframework.beans.factory.annotation.Autowired private LawService law;
+    @org.springframework.beans.factory.annotation.Autowired private SceneLoggingCamp camps;
+    @org.springframework.beans.factory.annotation.Value("${app.white-stone-sample:false}") private boolean whiteStoneSample;
+    private WorldMap currentCampWorld;
+    private WorldMap.Hex campSite;
+    WorldMap.Hex campSite(WorldMap world){
+        if(currentCampWorld!=world){currentCampWorld=world;campSite=SceneLoggingCamp.site(world).orElse(null);}
+        return campSite;
+    }
     SceneRuntime(JdbcTemplate db,SceneService scenes,CharacterService characters){this.db=db;this.scenes=scenes;this.characters=characters;}
     public SceneMap map(UUID id){return db.queryForList("select document from scene_documents where id=?",String.class,id).stream().map(d->json.readValue(d,SceneMap.class)).findFirst().orElseThrow(()->AccountService.bad("场景已不存在"));}
     public Position position(UUID actor){return db.query("select character_id,scene_id,q,r from scene_positions where character_id=? and active",(r,n)->new Position(r.getObject(1,UUID.class),r.getObject(2,UUID.class),r.getInt(3),r.getInt(4)),actor).stream().findFirst().orElse(null);}
@@ -23,10 +31,10 @@ public class SceneRuntime {
     public SceneMap outdoor(WorldMap world,WorldMap.Hex owner){
         var id=UUID.nameUUIDFromBytes((world.version()+":outdoor:"+owner.q()+":"+owner.r()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         var saved=db.queryForList("select document from scene_documents where id=? and world_version=?",String.class,id,world.version());
-        if(!saved.isEmpty()){var map=towns.ensure(content.ensure(json.readValue(saved.getFirst(),SceneMap.class),world),world);law.ensureStation(map);return map;}
+        if(!saved.isEmpty()){var map=towns.ensure(content.ensure(json.readValue(saved.getFirst(),SceneMap.class),world),world);law.ensureStation(map);return camps.ensure(map,campSite(world));}
         var tile=world.index().get(owner);if(tile==null||!tile.walkable())throw AccountService.bad("此地不能进入");
-        var result=SceneLandscape.generate(world,owner,15);
-        scenes.save(result);var ready=towns.ensure(content.ensure(result,world),world);law.ensureStation(ready);return ready;
+        var result=whiteStoneSample&&WhiteStoneLayout.matches(tile)?WhiteStoneLayout.generate(world,15):SceneLandscape.generate(world,owner,15);
+        scenes.save(result);var ready=towns.ensure(content.ensure(result,world),world);law.ensureStation(ready);return camps.ensure(ready,campSite(world));
     }
     public void arrived(UUID actor,String version,WorldMap.Hex from,WorldMap.Hex to){
         if(WorldMap.distance(from,to)!=1){db.update("delete from world_arrivals where character_id=?",actor);return;}
@@ -41,6 +49,10 @@ public class SceneRuntime {
         var old=position(actor);if(old!=null){if(old.sceneId().equals(scene.id()))return old;throw AccountService.bad("请先离开当前场景");}
         var occupied=occupied(scene.id(),actor);WorldMap.Hex cell=null;
         if(!edgeOnly){var remembered=db.query("select q,r from scene_positions where character_id=? and scene_id=?",(r,n)->new WorldMap.Hex(r.getInt(1),r.getInt(2)),actor,scene.id());if(!remembered.isEmpty()){cell=nearest(scene,remembered.getFirst(),occupied);if(cell==null)throw AccountService.bad("原位置附近没有合法空位");}}
+        if(cell==null&&!edgeOnly&&direction==null&&WhiteStoneLayout.applies(scene)){
+            var approach=WhiteStoneLayout.southEntry(scene);
+            if(scene.topology().connected(approach,approach,occupied))cell=approach;
+        }
         if(cell==null)cell=edgeCell(scene,direction,occupied);
         if(cell==null)throw AccountService.bad("对应边缘没有合法空位，请稍后再试");
         put(actor,scene.id(),cell);return position(actor);

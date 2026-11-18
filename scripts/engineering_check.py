@@ -12,6 +12,8 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 MAPPING = re.compile(r'@(Get|Post|Put|Patch|Delete)Mapping\s*\(\s*(?:(?:value|path)\s*=\s*)?"([^"]*)"')
+REQUEST_MAPPING = re.compile(r'@RequestMapping\b')
+CONTROLLER_PREFIX = re.compile(r'@RequestMapping\s*\(\s*(?:(?:value|path)\s*=\s*)?"([^"]*)"\s*\)')
 
 
 def scan_routes(root):
@@ -20,7 +22,12 @@ def scan_routes(root):
         source = file.read_text(encoding='utf-8-sig')
         if '@RestController' not in source or '@RestControllerAdvice' in source:
             continue
-        prefix = re.search(r'@RequestMapping\s*\(\s*(?:(?:value|path)\s*=\s*)?"([^"]*)"', source)
+        mappings = list(REQUEST_MAPPING.finditer(source))
+        prefix = CONTROLLER_PREFIX.match(source, mappings[0].start()) if len(mappings) == 1 else None
+        declaration = re.search(r'\bclass\s+' + re.escape(file.stem) + r'\b', source)
+        if mappings and (not prefix or not declaration or prefix.start() > declaration.start()):
+            errors.append(f'unsupported RequestMapping: {file.name}; use one controller prefix and explicit HTTP methods')
+            continue
         found = list(MAPPING.finditer(source))
         if len(found) != len(re.findall(r'@(Get|Post|Put|Patch|Delete)Mapping\b', source)):
             errors.append(f'unsupported route annotation: {file.name}; extend checker explicitly')

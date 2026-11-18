@@ -30,9 +30,7 @@ class GameplaySerializationContractTest {
             }
             var record = entry.getValue().getDeclaredConstructor(types).newInstance(values);
             var json = mapper.readTree(mapper.writeValueAsString(record));
-            var declaration = Pattern.compile("(?m)^export type " + entry.getKey() + "\\s*=([^\\r\\n]+)").matcher(protocol);
-            assertTrue(declaration.find(), "Missing client type: " + entry.getKey());
-            for (String field : requiredFields(declaration.group(1)))
+            for (String field : declaredFields(protocol,entry.getKey()))
                 assertTrue(json.has(field), entry.getKey()+" missing client field "+field);
             for (var component : components) {
                 if(component.getType() == boolean.class)
@@ -41,6 +39,12 @@ class GameplaySerializationContractTest {
                     assertTrue(json.get(component.getName()).isNumber(), component.getName());
             }
         }
+    }
+
+    static Set<String> declaredFields(String protocol,String name){
+        var declaration=Pattern.compile("(?m)^export type "+Pattern.quote(name)+"\\s*=").matcher(protocol);
+        assertTrue(declaration.find(),"Missing client type: "+name);
+        return requiredFields(protocol.substring(declaration.end()));
     }
 
     static Set<String> requiredFields(String declaration) {
@@ -80,5 +84,6 @@ class GameplaySerializationContractTest {
             requiredFields("Hex&{id:string;nested:{child:number;other:string};optional?:string};"));
         assertThrows(AssertionError.class, () -> requiredFields("{};"));
         assertThrows(AssertionError.class, () -> requiredFields("Other&{id:string};"));
+        assertEquals(Set.of("id","nested"),declaredFields("export type State={\n id:string;\n nested:{value:number};\n optional?:number;\n};\nexport type Other={missing:string};","State"));
     }
 }

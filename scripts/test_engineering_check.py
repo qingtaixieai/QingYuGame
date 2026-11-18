@@ -24,6 +24,19 @@ class EngineeringCheckTest(unittest.TestCase):
         errors = self.check.compare_routes({'GET /api/new'}, {'GET /api/old'})
         self.assertEqual(len(errors), 2)
 
+    def test_routes_reject_unhandled_request_mapping_forms(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'Method.java').write_text(
+                '@RestController class Method { @RequestMapping("/hidden") Object hidden(){} }')
+            (root / 'Aliases.java').write_text(
+                '@RestController @RequestMapping({"/api","/other"}) class Aliases { @GetMapping("/x") Object x(){} }')
+            (root / 'Mixed.java').write_text(
+                '@RestController @RequestMapping("/api") class Mixed { @GetMapping("/x") Object x(){} @RequestMapping("/hidden") Object hidden(){} }')
+            routes, errors = self.check.scan_routes(root)
+            self.assertEqual(routes, {})
+            self.assertEqual(len(errors), 3)
+
     def test_owner_requires_exactly_one_match(self):
         manifest = {'world': ['src/World*'], 'combat': ['src/Battle*']}
         self.assertEqual(self.check.owners('src/WorldMap.java', manifest), ['world'])

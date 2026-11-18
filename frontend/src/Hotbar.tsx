@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import {Crosshair,Target as Bow,FlaskConical,Hand,Footprints,Swords,Shield,Package,HeartHandshake,LogOut,Bandage,LockKeyhole,Unlock,Settings2,Check,X,Plus,LoaderCircle,RefreshCw} from 'lucide-react';
+import {Flame,Crosshair,Target as Bow,FlaskConical,Hand,Footprints,Swords,Shield,Package,HeartHandshake,LogOut,Bandage,LockKeyhole,Unlock,Settings2,Check,X,Plus,LoaderCircle,RefreshCw} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {api} from './api';
 import './hotbar.css';
@@ -8,8 +8,8 @@ type Slot={source:string;index:number;actionRef:string|null;locked:boolean};
 export type Action={id:string;source:string;name:string;icon:string;command:string;description:string;cost:number;costKind:string;quantity:number|null;disabledReason:string};
 type Layout={revision:number;slots:Slot[];actions:Action[]};
 const pages=[['common','通用'],['weapon','武器'],['item','道具'],['skill','技能'],['spell','法术'],['class','职业']];
-const icons={'quick-shot':Bow,aim:Crosshair,'aimed-shot':Bow,potion:FlaskConical,'throw-stone':Hand,'skill:interrupt':Hand,move:Footprints,attack:Swords,guard:Shield,equipment:Package,rescue:HeartHandshake,withdraw:LogOut,bandage:Bandage};
-export function Hotbar({signature,connected,busy,mode,points,reaction,armor,commands,onAction,onMessage,onEdit}:{signature:string;connected:boolean;busy:boolean;mode:string;points:number|null;reaction:number;armor:number;commands:ReactNode;onAction:(action:Action)=>void;onMessage:(message:string)=>void;onEdit:()=>void}){
+const icons={'skill:fireball':Flame,'quick-shot':Bow,aim:Crosshair,'aimed-shot':Bow,potion:FlaskConical,'throw-stone':Hand,'skill:interrupt':Hand,move:Footprints,attack:Swords,guard:Shield,equipment:Package,rescue:HeartHandshake,withdraw:LogOut,bandage:Bandage};
+export function Hotbar({exploration,signature,connected,busy,mode,points,reaction,armor,commands,onAction,onMessage,onEdit}:{exploration?:boolean;signature:string;connected:boolean;busy:boolean;mode:string;points:number|null;reaction:number;armor:number;commands:ReactNode;onAction:(action:Action)=>void;onMessage:(message:string)=>void;onEdit:()=>void}){
  const [data,setData]=useState<Layout|null>(null),[page,setPage]=useState('common'),[editing,setEditing]=useState(false),[selected,setSelected]=useState<number|null>(null),[saving,setSaving]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[retry,setRetry]=useState(0),[adding,setAdding]=useState(false);
  const request=useRef(0),dragged=useRef<number|null>(null),pending=useRef(false);
  useEffect(()=>{let active=true;const n=++request.current;setLoading(true);setError('');api<Layout>('/hotbar').then(next=>{if(active&&n===request.current)setData(old=>old&&old.revision>next.revision?old:next);}).catch(e=>{if(active&&n===request.current)setError(e.message);}).finally(()=>{if(active&&n===request.current)setLoading(false);});return()=>{active=false;};},[signature,retry]);
@@ -24,8 +24,8 @@ export function Hotbar({signature,connected,busy,mode,points,reaction,armor,comm
  const active=selected==null?null:data?.slots[selected];
  const restored=data?.actions.filter(a=>a.source===page&&!data.slots.some(s=>s.actionRef===a.id))??[];
  function select(index:number){if(selected!=null&&selected!==index&&!adding)void edit('swap',selected,index);else setSelected(selected===index?null:index);}
- return <div className="action-hotbar" aria-label="战斗操作栏">
-  <div className="hotbar-resources"><strong>{points??'—'}</strong><span>行动点</span><div className="hotbar-pips">{Array.from({length:6},(_,i)=><i key={i} className={points!=null&&i<points?'available':''}/>)}</div><small>反应 {reaction}/2</small>{armor>0&&<small>护甲 +{armor}</small>}</div>
+ return <div className={exploration?"action-hotbar exploration-hotbar":"action-hotbar"} aria-label={exploration?"探索操作栏":"战斗操作栏"}>
+  {!exploration&&<div className="hotbar-resources"><strong>{points??'—'}</strong><span>行动点</span><div className="hotbar-pips">{Array.from({length:6},(_,i)=><i key={i} className={points!=null&&i<points?'available':''}/>)}</div><small>反应 {reaction}/2</small>{armor>0&&<small>护甲 +{armor}</small>}</div>}
   <div className="action-hotbar-main">
    <div className="action-hotbar-heading"><div role="tablist" aria-label="动作来源">{pages.map(([id,name])=><button key={id} role="tab" aria-selected={page===id} aria-controls="action-slot-page" id={'action-tab-'+id} onClick={()=>setPage(id)}>{name}</button>)}</div><button className="hotbar-icon" aria-label={editing?'完成整理':'整理战斗栏'} title={editing?'完成整理':'整理战斗栏'} aria-pressed={editing} onClick={()=>{onEdit();setEditing(v=>!v);}}>{editing?<Check/>:<Settings2/>}</button></div>
    <div className="action-slot-row" role="tabpanel" aria-labelledby={'action-tab-'+page} id="action-slot-page" onPointerDown={e=>{const button=(e.target as Element).closest('button');if(!editing&&button?.getAttribute('aria-disabled')==='true'&&!button.classList.contains('empty'))onMessage(button.title);}} onKeyDown={e=>{if(!editing&&(e.key==='Enter'||e.key===' ')){const button=(e.target as Element).closest('button');if(button?.getAttribute('aria-disabled')==='true'&&!button.classList.contains('empty'))onMessage(button.title);}}}>

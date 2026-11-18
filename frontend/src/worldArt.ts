@@ -89,6 +89,8 @@ export function drawTerrainProp(g:Graphics,x:number,y:number,terrain:string,n:nu
         if(terrain==='mountain')drawMountain(g,x,y);
         if(terrain==='hill'){pixel(g,x-13,y+2,26,5,0x9eac7b);pixel(g,x-9,y-3,18,6,0xcbd0a0);pixel(g,x-4,y-6,8,4,0xd8d9ae);}
         if(terrain==='plain'&&!road){if(n===0)tree(g,x,y,1);else if(n===2){pixel(g,x-6,y-1,2,3,0xe8e5b5);pixel(g,x+5,y+3,2,3,0xe8e5b5);pixel(g,x-5,y+3,2,2,0x94b376);}}
+        if(!road&&terrain==='forest'&&n===2){pixel(g,x-9,y+5,12,3,0x816949);pixel(g,x-7,y+4,8,2,0xa18360);pixel(g,x+6,y+8,4,3,0x779559);}
+        if(!road&&terrain==='beach'&&n===3){pixel(g,x-5,y-4,2,7,0x8d9c61);pixel(g,x,y-7,2,10,0x8d9c61);pixel(g,x+4,y-3,2,6,0x9ca76c);}
         if(terrain==='bridge'){pixel(g,x-17,y-8,34,16,0x997751);for(let i=0;i<8;i++)pixel(g,x-15+i*4,y-7,3,14,0xd6b982);pixel(g,x-19,y-11,38,3,0x84664a);pixel(g,x-19,y+8,38,3,0x84664a);}
 }
 

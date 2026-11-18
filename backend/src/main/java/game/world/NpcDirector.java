@@ -49,7 +49,8 @@ public class NpcDirector {
     battles.joinResident(id,now);
    }
   }
-  for(UUID actor:runtime.activeActors()){var c=characters.get(actor);if(!c.npc())continue;var p=runtime.position(actor);double delta=Math.floorMod(actor.hashCode(),31)/100.0;
+  var campPatrols=new HashSet<>(db.queryForList("select monster_id from scene_logging_camps",UUID.class));
+  for(UUID actor:runtime.activeActors()){var c=characters.get(actor);if(!c.npc()||campPatrols.contains(actor))continue;var p=runtime.position(actor);double delta=Math.floorMod(actor.hashCode(),31)/100.0;
    db.update("insert into npc_tasks(actor_id,home_scene,home_q,home_r,caution,duty,damaged_hp) values(?,?,?,?,?,?,?) on conflict do nothing",actor,p.sceneId(),p.q(),p.r(),.85+delta,1.0,c.hp());
   }
  }
@@ -103,7 +104,7 @@ public class NpcDirector {
  public void prepare(long now,Actions actions){if(world!=null){ensure(now);respawn(now);alarms(now,actions);}}
  public boolean tick(long now,Actions actions){
   if(world==null)return false;boolean changed=false;
-  for(var t:db.queryForList("select t.* from npc_tasks t join characters c on c.id=t.actor_id where c.life='alive' order by t.actor_id")){
+  for(var t:db.queryForList("select t.* from npc_tasks t join characters c on c.id=t.actor_id where c.life='alive' and not exists(select 1 from scene_logging_camps where monster_id=t.actor_id) order by t.actor_id")){
    UUID actor=(UUID)t.get("actor_id");var p=runtime.position(actor);if(p==null||"courier".equals(characters.get(actor).species())||battles.engaged(actor)||actions.moving(actor)||db.queryForObject("select exists(select 1 from production_tasks where actor_id=?)",Boolean.class,actor))continue;
    if(!"pursue".equals(t.get("task"))&&Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from logistics_stops where target=? and accepted and expires_at>?)",Boolean.class,actor,now)))continue;
    UUID target=(UUID)t.get("target_id");var tp=target==null?null:runtime.position(target);String signature=p.sceneId()+":"+p.hex()+":"+tp+":"+characters.get(actor).hp();

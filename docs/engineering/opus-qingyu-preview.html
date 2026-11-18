@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>青屿 - QingYuGame</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}html,body{width:100%;height:100%;font-family:"微软雅黑",sans-serif;background:#1a1a1a;user-select:none}
+body{display:flex;overflow:hidden}
+#sidebar{width:60px;background:#2d2d2d;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:16px;border-right:1px solid #444;z-index:200}
+.nav-icon{width:40px;height:40px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#888;font-size:20px;border-radius:4px;transition:0.2s}
+.nav-icon:hover{background:#3d3d3d;color:#aaa}
+.nav-icon.active{background:#5a8f5a;color:#e8f5e9}
+#main{flex:1;display:flex;flex-direction:column;position:relative}
+#topBar{height:40px;background:#2d2d2d;border-bottom:1px solid #444;padding:0 16px;display:flex;justify-content:space-between;align-items:center;color:#ddd;font-size:13px}
+.location-label{font-weight:bold}
+.scene-buttons{display:flex;gap:6px}
+.scene-btn{background:#5a8f5a;color:#e8f5e9;border:1px solid #4a7f4a;padding:4px 8px;cursor:pointer;font-size:11px;border-radius:3px;transition:0.2s;white-space:nowrap}
+.scene-btn:hover{background:#6a9f6a}
+.scene-btn:disabled{opacity:0.5;cursor:not-allowed}
+#mapCanvas{flex:1;display:block;cursor:crosshair;background:#7ba97b}
+#bottomBar{height:0;background:#3a3a3a;border-top:1px solid #444;overflow:hidden;transition:height 0.3s ease;display:flex;align-items:center;padding:0 12px;gap:12px}
+#bottomBar.open{height:64px}
+.bottom-toggle{width:40px;height:40px;background:#5a8f5a;border:1px solid #4a7f4a;color:#e8f5e9;cursor:pointer;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+.bottom-toggle:hover{background:#6a9f6a}
+.toolbar{display:flex;gap:8px;flex:1}
+.tool-btn{flex:0 0 48px;height:48px;background:#5a8f5a;border:1px solid #4a7f4a;color:#e8f5e9;cursor:pointer;font-size:11px;border-radius:3px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:2px;transition:0.2s}
+.tool-btn:hover{background:#6a9f6a}
+.turn-order{display:flex;gap:8px;align-items:center;font-size:11px;color:#aaa;flex-shrink:0}
+.turn-item{width:24px;height:24px;background:#5a8f5a;border:1px solid #4a7f4a;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#e8f5e9}
+.turn-item.active{background:#6a9f6a;box-shadow:0 0 4px #7ba97b}
+#sidePanel{width:280px;background:#2d2d2d;border-left:1px solid #444;transform:translateX(280px);transition:transform 0.3s ease;overflow-y:auto;padding:12px;z-index:100}
+#sidePanel.open{transform:translateX(0)}
+#sideToggle{position:absolute;right:0;top:50%;transform:translateY(-50%);width:24px;height:60px;background:#5a8f5a;cursor:pointer;border-radius:4px 0 0 4px;z-index:100;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;transition:right 0.3s ease}
+#sideToggle.hidden{right:-24px}
+.panel-title{color:#7ba97b;font-weight:bold;margin-bottom:12px;font-size:13px}
+.log-item{color:#aaa;font-size:11px;padding:6px 0;border-bottom:1px solid #3a3a3a}
+.log-item span{color:#7ba97b}
+.preview-label{position:absolute;bottom:8px;right:8px;font-size:10px;color:#aaa;background:rgba(0,0,0,0.5);padding:4px 8px;border-radius:3px}
+@media (max-width:900px){
+#sidebar{width:48px}.nav-icon{width:36px;height:36px;font-size:18px}#sidePanel{width:240px}#topBar{font-size:12px;padding:0 12px}.scene-btn{padding:3px 6px;font-size:10px}.scene-buttons{gap:4px}.turn-order{font-size:10px}.turn-item{width:20px;height:20px;font-size:9px}
+}
+</style>
+<style>
+body { color:#284638; font-family:system-ui,sans-serif; }
+#main { position:fixed; inset:0; }
+#mapCanvas { position:absolute; inset:0; width:100%; height:100%; }
+#sidebar { display:none; }
+#topBar { position:absolute; inset:10px 12px auto 12px; z-index:2; height:auto; gap:8px; padding:0 0 0 46px; background:transparent; border:none; pointer-events:none; }
+.location-label,.scene-buttons,#sidePanel,#bottomBar,.bottom-toggle,#sideToggle,#selection { background:#f7f4e5; color:#284638; border:1px solid #829578; border-radius:7px; box-shadow:0 2px 8px #243b3029; }
+.location-label,.scene-buttons,#selection { padding:6px 9px; }
+.scene-buttons { pointer-events:auto; }
+.scene-btn,.tool-btn { background:#e5ebd7; color:#284638; border:1px solid #829578; min-height:32px; }
+.scene-btn:hover,.tool-btn:hover,.bottom-toggle:hover { background:#d6e2c5; }
+#sideToggle,#sideToggle.hidden { inset:10px auto auto 12px; width:38px; height:38px; transform:none; z-index:4; }
+#sidePanel { display:none; position:fixed; top:55px; left:12px; width:min(275px,42vw); bottom:auto; max-height:70vh; transform:none; z-index:3; }
+#sidePanel.open { display:block; }
+.panel-title,.log-item,.log-item span { color:#3e5b47; }
+.log-item { border-bottom:1px solid #d9e1cc; }
+#bottomBar { position:absolute; left:50%; bottom:10px; z-index:2; transform:translateX(-50%); height:auto; padding:0; overflow:visible; }
+#bottomBar .toolbar { display:none; }
+#bottomBar.open { height:auto; padding:4px; }
+#bottomBar.open .toolbar { display:flex; }
+#turnOrder { position:absolute; top:62px; left:50%; transform:translateX(-50%); z-index:2; background:#284638; color:#fff; border-radius:5px; }
+#turnOrder:not(:empty) { padding:5px 8px; }
+.preview-label { color:#284638; background:#f7f4e5; }
+#selection { position:absolute; bottom:12px; left:12px; margin:0; z-index:1; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="sidebar">
+<div class="nav-icon active" data-view="map">🗺</div>
+<div class="nav-icon" data-view="log">📋</div>
+<div class="nav-icon" data-view="team">👥</div>
+<div class="nav-icon" data-view="items">🎒</div>
+<div class="nav-icon" data-view="skills">⚔</div>
+</div>
+<div id="main">
+<div id="topBar">
+<div class="location-label" id="locationLabel">青屿 · 草地</div>
+<div class="scene-buttons" id="sceneButtons"></div>
+</div>
+<canvas id="mapCanvas"></canvas>
+<div id="bottomBar">
+<button id="bottomToggle" class="bottom-toggle" aria-label="切换热栏" aria-expanded="false">▼</button>
+<div class="toolbar" id="toolbar"></div>
+</div>
+<div class="turn-order" id="turnOrder"></div>
+<output id="selection" hidden></output>
+<div class="preview-label">概念预览 v0.2</div>
+<button id="sideToggle" aria-label="切换侧栏" aria-expanded="false">☰</button>
+</div>
+<div id="sidePanel">
+<div class="panel-title">📜 旅途档案</div>
+<div id="logContainer"></div>
+</div>
+
+<script>
+const canvas=document.getElementById('mapCanvas');
+const ctx=canvas.getContext('2d');
+const topBar=document.getElementById('topBar');
+const sidePanel=document.getElementById('sidePanel');
+const sideToggle=document.getElementById('sideToggle');
+const bottomBar=document.getElementById('bottomBar');
+const bottomToggle=document.getElementById('bottomToggle');
+const locationLabel=document.getElementById('locationLabel');
+const sceneButtons=document.getElementById('sceneButtons');
+const sidebar=document.getElementById('sidebar');
+const toolbar=document.getElementById('toolbar');
+const turnOrder=document.getElementById('turnOrder');
+const logContainer=document.getElementById('logContainer');
+
+const HEX={size:24,sqrt3:Math.sqrt(3)};
+let cameraPos={x:0,y:0};
+let selectedHex=null;
+let gameLog=[];
+
+const gameState={
+scene:'outdoor',
+inBattle:false,
+sidePanelOpen:false,
+bottomBarOpen:false,
+playerPos:{q:0,r:0},
+level:1
+};
+
+const maps={
+outdoor:{name:'青屿大陆',locations:[{name:'青屿',type:'grass',center:{q:0,r:0}},{name:'白石城',type:'city',center:{q:4,r:0}},{name:'望潮港',type:'inn',center:{q:-4,r:3}}]},
+whitestoneCity:{name:'白石城',locations:[{name:'白石城',type:'city',center:{q:0,r:0}},{name:'返回青屿',type:'exit',center:{q:-3,r:2}}]},
+wanChaoharbor:{name:'望潮港·旅店',locations:[{name:'旅店',type:'inn',center:{q:0,r:0}},{name:'返回青屿',type:'exit',center:{q:3,r:2}}]}
+};
+
+const sceneNavigation={
+outdoor:[{label:'进入白石城',action:'toCity'}],
+city:[{label:'进入旅店',action:'toInn'},{label:'返回青屿大陆',action:'toOutdoor'}],
+inn:[{label:'返回白石城',action:'toCity'}]
+};
+
+function resizeCanvas(){
+canvas.width=canvas.offsetWidth;
+canvas.height=canvas.offsetHeight;
+render();
+}
+window.addEventListener('resize',resizeCanvas);
+resizeCanvas();
+
+function hexToPixel(q,r){
+const x=HEX.size*(3/2*q);
+const y=HEX.size*(HEX.sqrt3/2*q+HEX.sqrt3*r);
+return{x:x+cameraPos.x+canvas.width/2,y:y+cameraPos.y+canvas.height/2};
+}
+
+function pixelToHex(x,y){
+x-=cameraPos.x+canvas.width/2;
+y-=cameraPos.y+canvas.height/2;
+const q=(2/3*x)/HEX.size;
+const r=(-1/3*x+HEX.sqrt3/3*y)/HEX.size;
+return{q:Math.round(q),r:Math.round(r)};
+}
+
+function drawHex(q,r,color){
+const{x,y}=hexToPixel(q,r);
+ctx.fillStyle=color;
+ctx.beginPath();
+for(let i=0;i<6;i++){
+const angle=Math.PI/3*i;
+const hx=x+HEX.size*Math.cos(angle);
+const hy=y+HEX.size*Math.sin(angle);
+if(i===0)ctx.moveTo(hx,hy);
+else ctx.lineTo(hx,hy);
+}
+ctx.closePath();
+ctx.fill();
+ctx.strokeStyle='#5a8f5a';
+ctx.lineWidth=1;
+ctx.stroke();
+}
+
+function drawPixelChar(x,y,color){
+ctx.fillStyle=color;
+ctx.fillRect(x-2,y-3,4,6);
+ctx.fillRect(x-3,y-1,6,4);
+}
+
+function renderOutdoor(){
+ctx.fillStyle='#7ba97b';
+ctx.fillRect(0,0,canvas.width,canvas.height);
+
+for(let q=-8;q<10;q++){
+for(let r=-8;r<10;r++){
+if(q+r<-5)drawHex(q,r,'#c9b896');
+}
+}
+
+for(let q=-8;q<10;q++){
+for(let r=-8;r<10;r++){
+if(q+r>=-5&&!(q+r<-3&&q>3))drawHex(q,r,'#8bc34a');
+}
+}
+
+for(let q=2;q<5;q++){
+for(let r=0;r<2;r++){
+drawHex(q,r,'#a0a08a');
+const{x,y}=hexToPixel(q,r);
+ctx.fillStyle='#8b8872';
+ctx.fillRect(x-6,y-6,12,12);
+}
+}
+
+const innHex={q:-4,r:3};
+drawHex(innHex.q,innHex.r,'#9b7653');
+const{x:ix,y:iy}=hexToPixel(innHex.q,innHex.r);
+ctx.fillStyle='#8b6643';
+ctx.fillRect(ix-8,iy-8,16,16);
+ctx.fillStyle='#e8d5b7';
+ctx.fillRect(ix-6,iy-6,4,4);
+ctx.fillRect(ix+2,iy-6,4,4);
+ctx.fillRect(ix-6,iy+2,4,4);
+ctx.fillRect(ix+2,iy+2,4,4);
+
+ctx.fillStyle='#558b2f';
+const seeds=[12,34,56,78,91,23,45,67,89,12,34,56];
+for(let i=0;i<seeds.length;i++){
+const q=Math.sin(seeds[i])*12-6;
+const r=Math.cos(seeds[i])*12-6;
+if(q+r>=-4&&!(q>2&&r<3)){
+const{x:tx,y:ty}=hexToPixel(q,r);
+ctx.fillRect(tx-3,ty-6,6,6);
+ctx.fillRect(tx-1,ty-8,2,3);
+}
+}
+
+drawPixelChar(canvas.width/2,canvas.height/2-40,'#d4a574');
+drawPixelChar(canvas.width/2+80,canvas.height/2-60,'#8b4513');
+
+ctx.fillStyle='#ddd';
+ctx.font='11px sans-serif';
+ctx.fillText('白石城',hexToPixel(4,0).x-20,hexToPixel(4,0).y+24);
+ctx.fillText('望潮港',hexToPixel(-4,3).x-20,hexToPixel(-4,3).y+24);
+}
+
+function renderCityMap(){
+ctx.fillStyle='#7ba97b';
+ctx.fillRect(0,0,canvas.width,canvas.height);
+
+for(let q=-6;q<7;q++){
+for(let r=-6;r<7;r++){
+drawHex(q,r,'#a0a08a');
+const{x,y}=hexToPixel(q,r);
+ctx.fillStyle='#8b8872';
+ctx.fillRect(x-6,y-6,12,12);
+}
+}
+
+ctx.fillStyle='#558b2f';
+for(let i=0;i<6;i++){
+const q=Math.sin(i*1.5)*5;
+const r=Math.cos(i*1.5)*5;
+const{x:tx,y:ty}=hexToPixel(q,r);
+ctx.fillRect(tx-3,ty-6,6,6);
+ctx.fillRect(tx-1,ty-8,2,3);
+}
+
+drawPixelChar(canvas.width/2,canvas.height/2-40,'#d4a574');
+drawPixelChar(canvas.width/2+60,canvas.height/2,'#8b4513');
+
+ctx.fillStyle='#ddd';
+ctx.font='11px sans-serif';
+ctx.fillText('城镇广场',canvas.width/2-24,canvas.height/2+40);
+}
+
+function renderInnMap(){
+ctx.fillStyle='#7ba97b';
+ctx.fillRect(0,0,canvas.width,canvas.height);
+
+for(let q=-4;q<5;q++){
+for(let r=-4;r<5;r++){
+drawHex(q,r,'#9b7653');
+}
+}
+
+const{x:ix,y:iy}=hexToPixel(0,0);
+ctx.fillStyle='#8b6643';
+ctx.fillRect(ix-12,iy-12,24,24);
+ctx.fillStyle='#e8d5b7';
+ctx.fillRect(ix-10,iy-10,5,5);
+ctx.fillRect(ix+5,iy-10,5,5);
+ctx.fillRect(ix-10,iy+5,5,5);
+ctx.fillRect(ix+5,iy+5,5,5);
+
+ctx.fillStyle='#558b2f';
+for(let i=0;i<4;i++){
+const{x:tx,y:ty}=hexToPixel(-2+i,-2+i);
+ctx.fillRect(tx-3,ty-6,6,6);
+}
+
+drawPixelChar(canvas.width/2-20,canvas.height/2-40,'#d4a574');
+
+ctx.fillStyle='#ddd';
+ctx.font='11px sans-serif';
+ctx.fillText('旅店大厅',canvas.width/2-24,canvas.height/2+60);
+}
+
+function render(){
+if(gameState.scene==='outdoor')renderOutdoor();
+else if(gameState.scene==='city')renderCityMap();
+else if(gameState.scene==='inn')renderInnMap();
+if(selectedHex)drawHex(selectedHex.q,selectedHex.r,'rgba(247,244,229,.42)');
+}
+
+function updateSceneButtons(){
+sceneButtons.innerHTML='';
+const navs=gameState.inBattle
+  ? [{label:'结束战斗',action:'endBattle'}]
+  : [...sceneNavigation[gameState.scene],{label:'开始战斗',action:'battle'}];
+navs.forEach(nav=>{
+const btn=document.createElement('button');
+btn.className='scene-btn';
+btn.textContent=nav.label;
+btn.onclick=()=>executeSceneAction(nav.action);
+sceneButtons.appendChild(btn);
+});
+}
+
+function executeSceneAction(action){
+if(action==='toCity'){gameState.scene='city';updateLocation('白石城·城镇广场');}
+else if(action==='toInn'){gameState.scene='inn';updateLocation('白石城·旅店大厅');}
+else if(action==='toOutdoor'){gameState.scene='outdoor';updateLocation('青屿·草地');}
+else if(action==='battle'){startBattle();}
+else if(action==='endBattle'){endBattle();}
+if(action.startsWith('to')){selectedHex=null;document.getElementById('selection').hidden=true;}
+updateSceneButtons();
+render();
+}
+
+function startBattle(){
+gameState.inBattle=true;
+addLog('战斗开始');
+updateToolbar();
+}
+
+function endBattle(){
+gameState.inBattle=false;
+addLog('战斗结束');
+updateToolbar();
+}
+
+function updateLocation(loc){
+locationLabel.textContent=loc;
+addLog('移动到: '+loc);
+}
+
+function updateToolbar(){
+toolbar.innerHTML='';
+if(gameState.inBattle){
+['攻击','防御','恢复','技能','逃离'].forEach(action=>{
+const btn=document.createElement('button');
+btn.className='tool-btn';
+btn.textContent=action;
+btn.onclick=()=>addLog('执行: '+action);
+toolbar.appendChild(btn);
+});
+updateTurnOrder();
+}else{
+const btn=document.createElement('button');
+btn.className='tool-btn';
+btn.textContent='等待中';
+btn.disabled=true;
+toolbar.appendChild(btn);
+turnOrder.innerHTML='';
+}
+}
+
+function updateTurnOrder(){
+turnOrder.innerHTML='<span>顺序:</span>';
+const chars=['你','敌','友'];
+chars.forEach((c,i)=>{
+const item=document.createElement('div');
+item.className='turn-item'+(i===0?' active':'');
+item.textContent=c;
+turnOrder.appendChild(item);
+});
+}
+
+function addLog(msg){
+const time=new Date().toLocaleTimeString('zh-CN',{hour12:false});
+gameLog.unshift(`<span>${time}</span> ${msg}`);
+gameLog=gameLog.slice(0,20);
+renderLog();
+}
+
+function renderLog(){
+logContainer.innerHTML=gameLog.map(log=>`<div class="log-item">${log}</div>`).join('');
+}
+
+canvas.addEventListener('click',(e)=>{
+const rect=canvas.getBoundingClientRect();
+const x=e.clientX-rect.left;
+const y=e.clientY-rect.top;
+const hex=pixelToHex(x,y);
+selectedHex=hex;
+const selection=document.getElementById('selection');
+selection.textContent=`所选地块 ${hex.q}, ${hex.r}`;
+selection.hidden=false;
+render();
+addLog(`选中地块 (${hex.q}, ${hex.r})`);
+});
+
+sideToggle.addEventListener('click',()=>{
+gameState.sidePanelOpen=!gameState.sidePanelOpen;
+sidePanel.classList.toggle('open');
+sideToggle.textContent=gameState.sidePanelOpen?'×':'☰';
+sideToggle.setAttribute('aria-expanded',gameState.sidePanelOpen);
+});
+
+bottomToggle.addEventListener('click',()=>{
+gameState.bottomBarOpen=!gameState.bottomBarOpen;
+bottomBar.classList.toggle('open');
+bottomToggle.textContent=gameState.bottomBarOpen?'▲':'▼';
+bottomToggle.setAttribute('aria-expanded',gameState.bottomBarOpen);
+});
+
+sidebar.addEventListener('click',(e)=>{
+const icon=e.target.closest('.nav-icon');
+if(!icon)return;
+document.querySelectorAll('.nav-icon').forEach(i=>i.classList.remove('active'));
+icon.classList.add('active');
+});
+
+addLog('游戏开始');
+updateSceneButtons();
+updateToolbar();
+render();
+</script>
+</body>
+</html>

@@ -25,17 +25,10 @@
   background: #fafaf3e8;
   backdrop-filter: blur(6px);
 }
-.game-shell .statusbar {
-  position: absolute;
-  inset: auto 0 0;
-  z-index: 8;
-  background: #f6f8ede8;
-  backdrop-filter: blur(6px);
-}
 .game-shell .rail {
   position: absolute;
   top: 76px;
-  bottom: 31px;
+  bottom: 0;
   left: 0;
   width: var(--rail-width);
   z-index: 7;
@@ -46,7 +39,7 @@
 .game-shell .sidebar.chat-sidebar {
   position: absolute;
   top: 76px;
-  bottom: 31px;
+  bottom: 0;
   left: var(--rail-width);
   width: var(--side-width);
   z-index: 6;
@@ -65,7 +58,6 @@
   left: calc(var(--rail-width) + 20px);
   transition: left 180ms ease;
 }
-.game-shell.sidebar-open .map-title,
 .game-shell.sidebar-open .location-card {
   left: calc(var(--rail-width) + var(--side-width) + 20px);
 }

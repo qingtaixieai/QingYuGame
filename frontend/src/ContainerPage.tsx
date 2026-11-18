@@ -9,7 +9,7 @@ import './container.css';
 
 const attributes=[['strength','力量'],['agility','敏捷'],['constitution','体魄'],['intellect','智识'],['perception','感知'],['willpower','意志']] as const;
 const kindName=(k:string)=>k==='corpse'?'尸体':k==='chest'?'宝箱':'掉落堆';
-function remaining(expires:number|null,clock:number){if(expires===null)return '携带中 · 计时暂停';const s=Math.max(0,Math.ceil((expires-clock)/1000));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} 后消失`;}
+function remaining(expires:number|null,clock:number){if(expires===null)return '携带中 · 计时暂停';if(expires>=Number.MAX_SAFE_INTEGER)return '固定货箱';const s=Math.max(0,Math.ceil((expires-clock)/1000));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} 后消失`;}
 
 /** 单个容器的独立大页面：点尸体/宝箱/掉落堆 → 复用人物页模板展示。 */
 export function ContainerPage({version,battle,me,clock,connected,position,scenePosition,containerId,onClose,onChanged}:{version:string;battle:BattleState;me:string;clock:number;connected:boolean;position:Hex;scenePosition?:Hex|null;containerId:string;onClose:()=>void;onChanged:()=>Promise<void>}){

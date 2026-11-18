@@ -1,5 +1,5 @@
 import {Container,Graphics} from 'pixi.js';
-import {battleCaptionLabel,cellKey,hexShape,sceneActor,sceneLabel,scenePoint} from './SceneCanvas';
+import {battleCaptionLabel,cellKey,hexShape,sceneActor,actorSpriteLabel,sceneLabel,scenePoint} from './SceneCanvas';
 import {localActor,localMarker,localRoute,localTerrain,type LocalCell} from './localSceneArt';
 import {drawWorldActor} from './worldArt';
 import type {BattleState,Hex,LootContainer} from './types';
@@ -78,16 +78,16 @@ export function drawBattleOverlay(layer:Container,{actors,relations,visual,loot,
   const ordered=[...actors].sort((a,b)=>scenePoint(visual[a.accountId]??a).y-scenePoint(visual[b.accountId]??b).y);
   for(const actor of ordered){
     const h=visual[actor.accountId]??actor,c=actor.character,down=c.life==='down';
-    const actorLayer=shared?sceneActor(layer,actor.accountId,h):layer;
-    const art=shared?actorLayer.addChild(new Graphics()):g;
-    const {x,y}=shared?{x:0,y:0}:scenePoint(h);
+    const actorLayer=sceneActor(layer,actor.accountId,h);
+    const art=actorLayer.addChild(new Graphics());
+    const {x,y}={x:0,y:0};
+    const sprite=actorLayer.addChild(new Graphics({label:actorSpriteLabel}));
     if(moving&&actor.accountId===me)art.ellipse(x,y+13,21,9).stroke({color:0xfff1aa,width:3});
     if(shared){
-      const sprite=actorLayer.addChild(new Graphics());
       drawWorldActor(sprite,{color:actor.color,online:actor.online,kind:c.kind,species:c.species},actor.accountId===me);
       sprite.scale.set(1.25);
       if(down)sprite.rotation=Math.PI/2;
-    }else localActor(g,h,actor.color,c.kind==='monster',down);
+    }else localActor(sprite,{q:0,r:0},actor.color,c.kind==='monster',down);
     const hp=down?c.downHp:c.hp,max=down?c.maxDownHp:c.maxHp;
     art.roundRect(x-21,y-37,42,6,2).fill(0x4b5042);
     const relation=actor.accountId===me?'ally':relations?.[actor.accountId]??'neutral';
@@ -98,16 +98,6 @@ export function drawBattleOverlay(layer:Container,{actors,relations,visual,loot,
     sceneLabel(caption,`${actor.username}${actor.accountId===me?' · 你':''}`,0,-16,12);
     sceneLabel(caption,`${down?'倒地 ':''}${hp}/${max}`,0,-4,10);
     if(actor.withdrawDirection!=null||!actor.online)sceneLabel(actorLayer,actor.withdrawDirection!=null?'正在撤离…':'离线',x,y+27,10, '#765442');
-  }
-}
-export function drawBattleEffects(layer:Container,events:Battle['events'],clock:number){
-  const g=new Graphics();layer.addChild(g);
-  for(const e of events){
-    const age=clock-e.happenedAt;
-    if(e.amount==null||e.q==null||e.r==null||age<0||age>1700)continue;
-    const {x,y}=scenePoint({q:e.q,r:e.r}),heal=e.kind==='potion'||e.kind==='bandage';
-    sceneLabel(layer,e.amount===0?'格挡':`${heal?'+':'−'}${e.amount}`,x,y-74-age/90,15,heal?'#40724a':'#a54236');
-    if(age<340&&!heal&&e.amount>0)g.moveTo(x-21,y+18).lineTo(x+22,y-23).moveTo(x-15,y-20).lineTo(x+18,y+18).stroke({color:0xffeabc,alpha:1-age/340,width:5});
   }
 }
 export const matches=(a:Hex|null,b:Hex)=>a!=null&&cellKey(a)===cellKey(b);

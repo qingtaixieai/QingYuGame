@@ -17,22 +17,31 @@ import {FerryPanel} from "../../FerryPanel";
 import {ShopPanel} from "../../ShopPanel";
 import {ProductionPanel,type ProductionState,type SceneObject} from "../../ProductionPanel";
 import {StatusPanel} from "../../StatusPanel";
-import {CombatLog} from "../../CombatLog";
 import {CharacterPanel,LifePanel} from "../../CharacterPanel";
 import {BattleView,type BattleViewProps} from "../../BattleView";
 import {SceneView,type ScenePosition,type SceneResident} from "../../SceneView";
 import type {MapControls} from "../../MapView";
-import type {Character,Account,Hex,Player,State,Tile,World,Item,ResourceNode,WorldAction,Emote,BattleSummary,BattleState,FerryState} from "../../types";
+import type {Character,Account,Hex,Player,Tile,World,Item,ResourceNode,WorldAction,Emote,BattleSummary,BattleState,FerryState,SceneEffect,BattleEvent,BattleExitCell} from "../../types";
 import {key,terrainNames,placeNames,walkable} from "../../types";
 import {Admin} from '../admin/Admin';
 import {Brand} from '../../components/Brand';
+import {parseWorldSocketMessage} from '../../shared/worldSocket';
+import {createBattleClosingTimer} from './battleClosing';
 
 export type GameProps={me:Account;onLogout:()=>void;onAccessLost:(reason?:string)=>void};
 type WorldRoute={version:string;origin:Hex;path:Hex[]};
 const emptyRoute:Hex[]=[];
 export function Game({me,onLogout,onAccessLost}:GameProps){
   const [blockedEdges,setBlockedEdges]=useState<import('../../types').BlockedEdge[]>([]);
+  const [sceneEffects,setSceneEffects]=useState<SceneEffect[]>([]);
+  const [fireballPreparation,setFireballPreparation]=useState('NONE');
   const [scenePosition,setScenePosition]=useState<ScenePosition|null>(null),[sceneResidents,setSceneResidents]=useState<SceneResident[]>([]),[sceneMoving,setSceneMoving]=useState(false);
+  const [characterPage,setCharacterPage]=useState<'equipment'|'bag'|'craft'>('equipment');
+  const [craftHost,setCraftHost]=useState<HTMLElement|null>(null);
+  const [explorationCollapsed,setExplorationCollapsed]=useState(false);
+  const [socialHost,setSocialHost]=useState<HTMLElement|null>(null);
+  const [handoverTarget,setHandoverTarget]=useState<{id:string}|null>(null);
+  function showCraft(){setCharacterPage('craft');setTab('inventory');setSidebarOpen(true);}
   const [production,setProduction]=useState<ProductionState|null>(null),[sceneObjects,setSceneObjects]=useState<SceneObject[]>([]),[facility,setFacility]=useState<SceneObject|null>(null);
   const [sceneDoors,setSceneDoors]=useState<import('../../SceneView').SceneDoor[]>([]),[sceneService,setSceneService]=useState<string|null>(null);
   const [sceneLoot,setSceneLoot]=useState<LootContainer[]>([]);
@@ -45,9 +54,9 @@ export function Game({me,onLogout,onAccessLost}:GameProps){
   const [routePreview,setRoutePreview]=useState<{id:string;route?:WorldRoute;error?:string}>();
   const [previewRetry,setPreviewRetry]=useState(0),[travelPending,setTravelPending]=useState(false);
   const [ferryDetails,setFerryDetails]=useState(false),[ferryBusy,setFerryBusy]=useState(false);
-  const [worldDetailsExpanded,setWorldDetailsExpanded]=useState(true);
+  const [worldDetailsExpanded,setWorldDetailsExpanded]=useState(false);
   const [tab,setTab]=useState<'places'|'players'|'inventory'|'chat'|'codex'>('places'),[sidebarOpen,setSidebarOpen]=useState(()=>!window.matchMedia('(max-height:600px) and (orientation:landscape)').matches),[filter,setFilter]=useState('all'),[zoom,setZoom]=useState(100),[connected,setConnected]=useState(false),[message,setMessage]=useState(''),[admin,setAdmin]=useState(false),[loading,setLoading]=useState(true);
-  const [chatRevision,setChatRevision]=useState(0),[chatMode,setChatMode]=useState<'public'|'private'>('public'),[chatPeer,setChatPeer]=useState<string|null>(null);
+  const [chatRevision,setChatRevision]=useState(0),[chatMode,setChatMode]=useState<'public'|'private'|'journal'>('public'),[chatPeer,setChatPeer]=useState<string|null>(null);
   const {status:chatStatus,refresh:refreshChat}=useChatStatus(chatRevision,onAccessLost);
   useEffect(()=>{if(scenePosition)setSidebarOpen(false);},[scenePosition?.sceneId]);
   const showTab=(next:'places'|'players'|'inventory'|'chat'|'codex')=>{if(tab===next)setSidebarOpen(open=>!open);else{setTab(next);setSidebarOpen(true);}};
@@ -58,7 +67,43 @@ export function Game({me,onLogout,onAccessLost}:GameProps){
   const [battle,setBattle]=useState<BattleState>({active:false}),[battles,setBattles]=useState<BattleSummary[]>([]),[view,setView]=useState<'world'|'battle'>('world');
   const battleRef=useRef<BattleState>({active:false}),battleRevision=useRef(-1),battleRequest=useRef(0);
   const [hotbarRevision,setHotbarRevision]=useState(-1);
-  const refreshBattle=useCallback(async()=>{const request=++battleRequest.current;const next=await api<BattleState>('/battle/current');if(request!==battleRequest.current)return;const previous=battleRef.current;battleRef.current=next;setBattle(next);if(next.active&&(!previous.active||previous.id!==next.id)){setView('battle');setSidebarOpen(false);}if(!next.active&&previous.active){setView('world');setBattleEnded(!previous.sceneId);setMessage(previous.sceneId?'战斗已结束或已撤离，位置以当前场景为准':'你已离开战场，可查看本格战利品');}},[]);
+  type ClosingBattle={id:string;cell:Hex;sceneId:string;exitCells:BattleExitCell[];events:BattleEvent[]};
+  const [closingBattle,setClosingBattle]=useState<ClosingBattle>();
+  const [closingTimer]=useState(()=>createBattleClosingTimer(window.setTimeout.bind(window),window.clearTimeout.bind(window)));
+  const visibleView=useRef(view);visibleView.current=view;
+  useEffect(()=>closingTimer.cancel,[closingTimer]);
+  const refreshBattle=useCallback(async()=>{
+    const request=++battleRequest.current;
+    const next=await api<BattleState>('/battle/current');
+    if(request!==battleRequest.current)return;
+    const previous=battleRef.current;
+    battleRef.current=next;
+    if(next.active&&(!previous.active||previous.id!==next.id)){
+      closingTimer.cancel();setClosingBattle(undefined);
+      setView('battle');setSidebarOpen(false);
+    }
+    if(!next.active&&previous.active){
+      const actor=previous.actors.find(candidate=>candidate.accountId===me.id);
+      if(previous.sceneId&&actor&&visibleView.current==='battle'&&!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+        const transition={id:previous.id,cell:actor,sceneId:previous.sceneId,events:previous.events,exitCells:previous.exitCells??[]};
+        setClosingBattle(transition);
+        const clear=()=>setClosingBattle(current=>current?.id===transition.id?undefined:current);
+        closingTimer.start(transition.id,1800,clear);
+        void api<{battleId?:string;active:boolean;events:BattleEvent[]}>('/battle/report').then(report=>{
+          if(report.active||report.battleId!==transition.id||battleRef.current.active||!closingTimer.isCurrent(transition.id))return;
+          const existing=new Set(transition.events.map(event=>event.id));
+          const fresh=report.events.filter(event=>!existing.has(event.id)&&Date.now()+offset.current-event.happenedAt<2600);
+          const effect=fresh.some(event=>event.kind==='meteor'||event.kind==='attack');
+          if(!effect){closingTimer.extend(transition.id,420);return;}
+          setClosingBattle(current=>current?.id===transition.id?{...current,events:[...transition.events,...fresh]}:current);
+          closingTimer.extend(transition.id,fresh.some(event=>event.kind==='meteor')?2250:1500);
+        }).catch(()=>{});
+      }
+      setView('world');setBattleEnded(!previous.sceneId);
+      setMessage(previous.sceneId?'战斗已结束或已撤离，位置以当前场景为准':'你已离开战场，可查看本格战利品');
+    }
+    setBattle(next);
+  },[me.id,closingTimer]);
   const offset=useRef(0),resourceSignature=useRef(''),previousItems=useRef<Item[]|null>(null);
   const applyInventory=(next:Item[])=>{if(previousItems.current){const gained=next.map(i=>({name:i.name,quantity:i.quantity-(previousItems.current!.find(old=>old.code===i.code)?.quantity||0)})).filter(i=>i.quantity>0);if(gained.length)setMessage(gained.map(i=>`${i.name} +${i.quantity}`).join(' · '));}previousItems.current=next;setItems(next);};
   useEffect(()=>{const timer=setInterval(()=>setClock(Date.now()+offset.current),1000);return()=>clearInterval(timer);},[]);
@@ -70,9 +115,11 @@ export function Game({me,onLogout,onAccessLost}:GameProps){
     if(!world)return;
     let alive=true,socket:WebSocket|null=null,timer:ReturnType<typeof setTimeout>|null=null,attempt=0;
     function connect(){
-      socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
-      socket.onopen=()=>{if(alive){setConnected(true);attempt=0;resourceSignature.current='';void refreshBattle().catch(e=>setMessage(e.message));}};
-      socket.onmessage=e=>{if(!alive)return;const data=JSON.parse(e.data);if(data.type==='chat-changed'){setChatRevision(v=>v+1);return;}if(data.type!=='state')return;const state=data as State;
+      const connection=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+      socket=connection;
+      const isCurrent=()=>alive&&socket===connection;
+      connection.onopen=()=>{if(isCurrent()){setConnected(true);attempt=0;resourceSignature.current='';void refreshBattle().catch(e=>setMessage(e.message));}};
+      connection.onmessage=e=>{if(!isCurrent())return;const data=parseWorldSocketMessage(e.data);if(!data)return;if(data.type==='chat-changed'){setChatRevision(v=>v+1);return;}const state=data;const effects=state.sceneEffects??[];setSceneEffects(previous=>previous.length===effects.length&&previous.every((effect,i)=>effect.id===effects[i].id)?previous:effects);setFireballPreparation(state.fireballPreparation??'NONE');
         if(data.version!==lastVersion.current){lastVersion.current=data.version;setMessage('世界地图已更新，正在载入');reload().catch(e=>setMessage(e.message));}
         offset.current=data.serverTime-Date.now();setClock(data.serverTime);setActions(data.actions);setEmotes(data.emotes||[]);setBattles(state.battles||[]);setFerry(state.ferry||null);
         setBlockedEdges(state.blockedEdges||[]);
@@ -80,18 +127,30 @@ export function Game({me,onLogout,onAccessLost}:GameProps){
         setSceneDoors(old=>JSON.stringify(old)===JSON.stringify(nextDoors)?old:nextDoors);
         setSceneService(state.sceneService||null);setProduction(state.production||null);
         setSceneObjects(old=>JSON.stringify(old)===JSON.stringify(nextObjects)?old:nextObjects);setScenePosition(state.scenePosition||null);setSceneMoving(!!state.sceneMoving);
-        const nextResidents=state.sceneResidents||[],nextLoot=(state as State&{loot?:LootContainer[]}).loot||[];
+        const nextResidents=state.sceneResidents||[],nextLoot=state.loot||[];
         setSceneResidents(old=>JSON.stringify(old)===JSON.stringify(nextResidents)?old:nextResidents);
         setLoot(old=>JSON.stringify(old)===JSON.stringify(nextLoot)?old:nextLoot);
-        setSceneLoot((state as State&{sceneLoot?:LootContainer[]}).sceneLoot||[]);
+        setSceneLoot(state.sceneLoot||[]);
         if(state.battleRevision!==battleRevision.current){battleRevision.current=state.battleRevision;setHotbarRevision(state.battleRevision);void refreshBattle().catch(e=>setMessage(e.message));}
-        const signature=JSON.stringify(data.resources);if(signature!==resourceSignature.current){setResources(data.resources);resourceSignature.current=signature;api<Item[]>('/inventory').then(v=>{if(alive)applyInventory(v);}).catch(e=>{if(alive){if(resourceSignature.current===signature)resourceSignature.current='';setMessage(e.message);}});}
-        setCorpses((state as State&{carriedCorpses:LootContainer[]}).carriedCorpses||[]);setCharacter(state.character);if(state.inventory){previousItems.current=state.inventory;setItems(state.inventory);}
+        const signature=JSON.stringify(data.resources);if(signature!==resourceSignature.current){setResources(data.resources);resourceSignature.current=signature;api<Item[]>('/inventory').then(v=>{if(isCurrent())applyInventory(v);}).catch(e=>{if(isCurrent()){if(resourceSignature.current===signature)resourceSignature.current='';setMessage(e.message);}});}
+        setCorpses(state.carriedCorpses||[]);setCharacter(state.character);if(state.inventory){previousItems.current=state.inventory;setItems(state.inventory);}
         setPlayers(old=>JSON.stringify(old)===JSON.stringify(state.players)?old:state.players);
         const own=state.players.find(p=>p.id===me.id);if(own)setRoute(old=>{const i=old.findIndex(h=>h.q===own.q&&h.r===own.r);return own.moving?(i>=0?old.slice(i+1):old):(old.length?[]:old);});
       };
-      socket.onclose=()=>{if(!alive)return;setConnected(false);api<Account>('/me').then(a=>{if(!a.approved){onAccessLost();return;}timer=setTimeout(connect,Math.min(10000,1000*2**attempt++));}).catch(e=>{if(e instanceof ApiError&&[401,403].includes(e.status))onAccessLost(e.message);else timer=setTimeout(connect,5000);});};
-      socket.onerror=()=>socket?.close();
+      connection.onclose=()=>{
+        if(!isCurrent())return;
+        setConnected(false);
+        api<Account>('/me').then(account=>{
+          if(!isCurrent())return;
+          if(!account.approved){onAccessLost();return;}
+          timer=setTimeout(connect,Math.min(10000,1000*2**attempt++));
+        }).catch(error=>{
+          if(!isCurrent())return;
+          if(error instanceof ApiError&&[401,403].includes(error.status))onAccessLost(error.message);
+          else timer=setTimeout(connect,5000);
+        });
+      };
+      connection.onerror=()=>connection.close();
     }
     connect();return()=>{alive=false;if(timer)clearTimeout(timer);socket?.close();};
   },[!!world,me.id,refreshBattle]);
@@ -230,22 +289,28 @@ export function Game({me,onLogout,onAccessLost}:GameProps){
   const battleSceneId=battleProps?.battle.sceneId;
   const battleActor=battleProps?.battle.actors.find(actor=>actor.accountId===me.id);
   const sceneBattle=battleSceneId?battleProps:undefined;
+  const explorationWeapon=useMemo(()=>{
+    if(items.some(item=>item.code===character?.offhand&&item.hand_usage==='off_two'))return null;
+    const item=items.find(entry=>entry.code===character?.weapon);
+    return item?{code:item.code,name:item.name,shape:item.shape,minRange:item.min_range,maxRange:item.max_range,cost:item.attack_cost,damage:item.damage,moveRule:item.move_rule}
+      :{code:'unarmed',name:'空手',shape:'single',minRange:1,maxRange:1,cost:2,damage:2,moveRule:''};
+  },[items,character?.weapon,character?.offhand]);
   const renderedScenePosition=battleSceneId&&battleActor&&scenePosition?.sceneId!==battleSceneId
     ? {q:battleActor.q,r:battleActor.r,sceneId:battleSceneId,characterId:me.id}
-    : scenePosition;
+    : closingBattle?{...closingBattle.cell,sceneId:closingBattle.sceneId,characterId:me.id}:scenePosition;
   return <div className={'game-shell '+(sidebarOpen?'sidebar-open':'sidebar-closed')+(topHidden?' top-hidden':'')}><div className="rotate-prompt"><Compass size={40}/><h2>请横屏游玩</h2><p>旋转手机，展开你的冒险地图</p></div><button className="top-toggle" aria-expanded={!topHidden} aria-label={topHidden?'展开顶部横栏':'收起顶部横栏'} onClick={()=>setTopHidden(v=>!v)}><TreePine size={22}/></button><header className="topbar"><Brand/><div className="world-heading"><span>{battle.active&&view==='battle'?'局部战斗':'世界探索'}</span><span className="divider"/><span>青屿大陆</span><span className="version-badge">探索试玩</span></div><div className="top-actions">{battle.active&&<button className="view-switch" aria-label={view==='world'?'切换到战斗地图':'切换到大世界地图'} onClick={()=>setView(current=>current==='world'?'battle':'world')}>{view==='world'?<Swords size={16}/>:<MapIcon size={16}/ >}{view==='world'?'查看战场':'查看大世界'}</button>}<span className={'connection '+(connected?'':'disconnected')}><i/>{connected?`${online.length} 位旅人在线`:'正在重新连接'}</span><span className="avatar" style={{background:me.color}}>{me.username.slice(0,1)}</span><span className="username">{me.username}</span><button className="icon-button" title="退出登录" aria-label="退出登录" onClick={onLogout}><LogOut size={17}/></button></div></header>
     <div className="workspace"><nav className="rail"><button aria-label={sidebarOpen?'收起侧栏':'展开侧栏'} aria-expanded={sidebarOpen} title={sidebarOpen?'收起侧栏':'展开侧栏'} onClick={()=>setSidebarOpen(open=>!open)}>{sidebarOpen?<PanelLeftClose size={21}/>:<PanelLeftOpen size={21}/>}</button><button className={sidebarOpen&&tab==='places'?'active':''} aria-label="地点目录" title="地点目录" onClick={()=>showTab('places')}><MapIcon size={22}/></button><button className={sidebarOpen&&tab==='players'?'active':''} aria-label="旅人列表" title="旅人列表" onClick={()=>showTab('players')}><Users size={21}/></button><button className={sidebarOpen&&tab==='inventory'?'active':''} aria-label="人物" title="人物" onClick={()=>showTab('inventory')}><Backpack size={21}/></button><button className={'chat-rail-button '+(sidebarOpen&&tab==='chat'?'active':'')} aria-label="聊天室" title="聊天室" onClick={()=>showTab('chat')}><MessageCircle size={21}/>{(chatStatus.publicUnread||chatStatus.contacts.some(c=>c.unread))&&<i className="unread-dot" aria-label="聊天有未读消息"/>}</button><button className={sidebarOpen&&tab==='codex'?'active':''} aria-label="图鉴" title="图鉴" onClick={()=>showTab('codex')}><BookOpen size={21}/></button><div className="rail-spacer"/>{me.admin&&<button title="管理后台" aria-label="管理后台" onClick={()=>setAdmin(true)}><Shield size={21}/></button>}<span className="rail-leaf"><Leaf size={18}/></span></nav>
-    <aside className={'sidebar '+(tab==='chat'?'chat-sidebar':'')+(sidebarOpen?'':' collapsed')} aria-hidden={!sidebarOpen}>{tab==='codex'?<GameCodex world={world}/>:tab==='chat'?<ChatPanel me={me} status={chatStatus} players={players} revision={chatRevision} refresh={refreshChat} mode={chatMode} onMode={setChatMode} peer={chatPeer} onPeer={setChatPeer}/>:<><div className="sidebar-heading"><span className="tiny-label">{tab==='places'?'THE WORLD AT A GLANCE':tab==='inventory'?'YOUR ADVENTURER':'FELLOW TRAVELERS'}</span><h2>{tab==='places'?'大陆手记':tab==='inventory'?'人物':'同行旅人'}<span>{tab==='places'?world?.tiles.filter(t=>t.place).length||'—':tab==='inventory'?items.filter(i=>i.quantity>0).length:players.length}</span></h2><p>{tab==='places'?'选一处目的地，让好奇心带路。':tab==='inventory'?'准备行装，踏上下一段旅途。':'每个名字，都是另一段旅途。'}</p></div>
-      {tab==='places'?<><div className="filters">{[['all','全部'],['town','城镇'],['village','村庄'],['ruin','遗迹'],['port','港口'],['landing','停靠点']].map(([id,label])=><button key={id} onClick={()=>setFilter(id)} className={filter===id?'active':''}>{label}</button>)}</div><div className="place-list">{landmarks.map(t=><button className={'place-row '+(selected&&key(selected)===key(t)?'selected':'')} key={key(t)} onClick={()=>{choose(t);controls.current?.locate(t);}}><span className={'place-icon '+t.place!.type}>{t.place!.type==='ruin'?<Landmark size={20}/>:<Home size={20}/>}</span><span><strong>{t.place!.name}{key(t)===key(world!.spawn)&&<em>起点</em>}</strong><small>{placeNames[t.place!.type]} <span>·</span> {t.q}, {t.r}</small></span><ChevronRight size={15}/></button>)}</div><div className="sidebar-note"><Compass size={23}/><div><strong>不必赶路</strong><p>这里没有行动点限制。<br/>沿途的风景，也值得停留。</p></div></div></>:tab==='inventory'?<CharacterPanel corpses={corpses} onLoot={id=>setContainerOpen(id)} onDrop={()=>setDropOpen(true)} character={character} items={items} locked={battle.active||character?.life!=='alive'} onEquip={equip}/>:<div className="place-list">{players.filter(p=>p.kind!=='monster').map(p=><div className="traveler-row" key={p.id}><button className="place-row" onClick={()=>{const t=world?.tiles.find(t=>key(t)===key(p));if(t)choose(t);controls.current?.locate(p);}}><span className="avatar" style={{background:p.online?p.color:'#a7ada8'}}>{p.username.slice(0,1)}</span><span><strong>{p.username}{p.id===me.id&&<em>你</em>}</strong><small>{p.online?'在线':'离线'} · {p.q}, {p.r}</small></span><i className={'status-dot '+(p.online?'online':'')}/></button>{p.id!==me.id&&<button className="traveler-chat icon-button" title={`私聊 ${p.username}`} aria-label={`私聊 ${p.username}`} onClick={()=>openPrivate(p.id)}><MessageCircle size={15}/></button>}</div>)}{!players.length&&<p className="empty">连接后将在这里显示旅人。</p>}</div>}
+    <aside className={'sidebar '+(tab==='chat'?'chat-sidebar':'')+(sidebarOpen?'':' collapsed')} aria-hidden={!sidebarOpen}>{tab==='codex'?<GameCodex world={world}/>:tab==='chat'?<ChatPanel me={me} status={chatStatus} players={players} revision={chatRevision} battleRevision={hotbarRevision} refresh={refreshChat} mode={chatMode} onMode={setChatMode} peer={chatPeer} onPeer={setChatPeer}/>:<><div className="sidebar-heading"><span className="tiny-label">{tab==='places'?'THE WORLD AT A GLANCE':tab==='inventory'?'YOUR ADVENTURER':'FELLOW TRAVELERS'}</span><h2>{tab==='places'?'大陆手记':tab==='inventory'?'人物':'同行旅人'}<span>{tab==='places'?world?.tiles.filter(t=>t.place).length||'—':tab==='inventory'?items.filter(i=>i.quantity>0).length:players.length}</span></h2><p>{tab==='places'?'选一处目的地，让好奇心带路。':tab==='inventory'?'准备行装，踏上下一段旅途。':'每个名字，都是另一段旅途。'}</p></div>
+      {tab==='places'?<><div className="filters">{[['all','全部'],['town','城镇'],['village','村庄'],['ruin','遗迹'],['port','港口'],['landing','停靠点']].map(([id,label])=><button key={id} onClick={()=>setFilter(id)} className={filter===id?'active':''}>{label}</button>)}</div><div className="place-list">{landmarks.map(t=><button className={'place-row '+(selected&&key(selected)===key(t)?'selected':'')} key={key(t)} onClick={()=>{choose(t);controls.current?.locate(t);}}><span className={'place-icon '+t.place!.type}>{t.place!.type==='ruin'?<Landmark size={20}/>:<Home size={20}/>}</span><span><strong>{t.place!.name}{key(t)===key(world!.spawn)&&<em>起点</em>}</strong><small>{placeNames[t.place!.type]} <span>·</span> {t.q}, {t.r}</small></span><ChevronRight size={15}/></button>)}</div><div className="sidebar-note"><Compass size={23}/><div><strong>不必赶路</strong><p>这里没有行动点限制。<br/>沿途的风景，也值得停留。</p></div></div></>:tab==='inventory'?<><nav className="character-tabs" aria-label="人物栏目">{([['equipment','装备'],['bag','背包'],['craft','制作']] as const).map(([page,label])=><button key={page} aria-pressed={characterPage===page} onClick={()=>{setCharacterPage(page);if(page==='craft')setFacility(null);}}>{label}</button>)}</nav>{characterPage==='craft'?<div className="character-craft-host" ref={setCraftHost}/>:<CharacterPanel view={characterPage} corpses={corpses} onLoot={id=>setContainerOpen(id)} onDrop={()=>setDropOpen(true)} character={character} items={items} locked={battle.active||character?.life!=='alive'} onEquip={equip}/>}</>:<div className="place-list">{players.filter(p=>p.kind!=='monster').map(p=><div className="traveler-row" key={p.id}><button className="place-row" onClick={()=>{const t=world?.tiles.find(t=>key(t)===key(p));if(t)choose(t);controls.current?.locate(p);}}><span className="avatar" style={{background:p.online?p.color:'#a7ada8'}}>{p.username.slice(0,1)}</span><span><strong>{p.username}{p.id===me.id&&<em>你</em>}</strong><small>{p.online?'在线':'离线'} · {p.q}, {p.r}</small></span><i className={'status-dot '+(p.online?'online':'')}/></button>{p.id!==me.id&&<button className="traveler-chat icon-button" title={`私聊 ${p.username}`} aria-label={`私聊 ${p.username}`} onClick={()=>openPrivate(p.id)}><MessageCircle size={15}/></button>}</div>)}{!players.length&&<p className="empty">连接后将在这里显示旅人。</p>}</div>}
     </>}</aside>
     <main className={'map-surface '+(battle.active&&view==='battle'?'show-battle':'')}>{world&&<MapView blockedEdges={blockedEdges} loot={loot} deathMark={character?.life==='soul'&&character.deathQ!=null&&character.deathR!=null?{q:character.deathQ,r:character.deathR}:null} active={(!scenePosition||battle.active&&view==='world')&&!(battle.active&&view==='battle')} ferry={ferry} world={world} battles={battles} emotes={scenePosition?[]:emotes} resources={resources} actions={actions} clockOffset={offset.current} players={players} me={me.id} selected={selected} interactions={worldInteractions} activeComponent={worldComponent?.id??null} route={activePreview?.route?.path??(own?.moving?route:emptyRoute)} onSelect={choose} onZoom={setZoom} controls={controls}/>}
       {battleEnded&&!battle.active&&<div className="battle-result"><strong>已返回大世界</strong><button onClick={()=>{setLootOpen(true);setBattleEnded(false);}}>查看战利品</button><button onClick={()=>setBattleEnded(false)}>关闭</button></div>}
-      {!battle.active&&<ProductionPanel state={production} items={items} facility={facility} onFacility={setFacility} disabled={!connected||!!own?.moving||sceneMoving||character?.life!=='alive'} battle={false} clock={clock} onMessage={setMessage}/>}
-      <SocialPanel carried={corpses} me={me.id} position={scenePosition} residents={sceneResidents} items={items} battle={battle.active} connected={connected} onMessage={setMessage}/>
-      {!battle.active&&<CombatLog revision={hotbarRevision}/>}
+      <ProductionPanel state={production} items={items} facility={facility&&scenePosition&&sceneObjects.some(o=>o.id===facility.id)&&Math.max(Math.abs(facility.q-scenePosition.q),Math.abs(facility.r-scenePosition.r),Math.abs(facility.q+facility.r-scenePosition.q-scenePosition.r))===1?sceneObjects.find(o=>o.id===facility.id)??null:null} host={craftHost} onView={showCraft} disabled={!connected||!!own?.moving||sceneMoving||character?.life!=='alive'} battle={battle.active} clock={clock} onMessage={setMessage}/>
+      <SocialPanel admin={me.admin} contextHost={socialHost} handoverTarget={handoverTarget} carried={corpses} me={me.id} position={scenePosition} residents={sceneResidents} items={items} battle={battle.active} connected={connected} onMessage={setMessage}/>
       {renderedScenePosition&&<SceneView key={renderedScenePosition.sceneId} position={renderedScenePosition}
-        battleView={sceneBattle} hidden={battle.active&&(view==='world'||!sceneBattle)} worldName={world?.name??'青屿大陆'}
-        production={production} clock={clock} emotes={emotes} lifeBusy={lifeBusy} onCancelRest={()=>void lifeAction('cancel')} doors={sceneDoors} service={sceneService} onShop={()=>setShopOpen(true)} onRest={()=>void lifeAction('rest')} objects={sceneObjects} onFacility={setFacility} residents={sceneResidents} players={players} loot={sceneLoot} onLoot={setContainerOpen} moving={sceneMoving} connected={connected} me={me.id} onMessage={setMessage} onBattle={id=>void startBattle(id)}/>}
+        weapon={explorationWeapon} sceneEffects={sceneEffects} fireballPreparation={fireballPreparation} hotbarRevision={hotbarRevision} onEquipment={()=>{setTab('inventory');setSidebarOpen(true);}}
+        battleView={sceneBattle} closingBattle={closingBattle} hidden={battle.active&&(view==='world'||!sceneBattle)} worldName={world?.name??'青屿大陆'}
+        production={production} clock={clock} emotes={emotes} lifeBusy={lifeBusy} onCancelRest={()=>void lifeAction('cancel')} doors={sceneDoors} service={sceneService} onShop={()=>setShopOpen(true)} onRest={()=>void lifeAction('rest')} objects={sceneObjects} onFacility={o=>{setFacility(o);showCraft();}} explorationCollapsed={explorationCollapsed} onToggleExploration={()=>setExplorationCollapsed(value=>!value)} onTrade={id=>setHandoverTarget({id})} onSocialHost={setSocialHost} equippedTool={items.find(item=>item.code===character?.weapon)?.subtype} residents={sceneResidents} players={players} loot={sceneLoot} onLoot={setContainerOpen} moving={sceneMoving} connected={connected} me={me.id} onMessage={setMessage} onBattle={id=>void startBattle(id)}/>}
       {battleProps&&view==='battle'&&!battleProps.battle.sceneId&&<BattleView key={battleProps.battle.id} {...battleProps}/>}
       {battle.active&&view==='world'&&<div className="battle-world-note" role="status">角色正在战斗中 · 大世界仅供查看</div>}
       {loading&&<div className="map-loading"><LoaderCircle className="spin"/>正在展开大陆地图…</div>}
@@ -266,8 +331,8 @@ export function Game({me,onLogout,onAccessLost}:GameProps){
         onToggleDetails={()=>setWorldDetailsExpanded(open=>!open)}
         onClose={selected&&!aboard?()=>{setSelected(null);setActiveComponent(null);setFerryDetails(false);}:undefined}
         primary={componentAction}
+        choices={!aboard&&<PlaceComponents items={worldCellComponents} selected={worldComponent?.id} onSelect={id=>setActiveComponent(id)}/>}
         secondary={componentAction===secondaryAction?undefined:secondaryAction}>
-        {!aboard&&<PlaceComponents items={worldCellComponents} selected={worldComponent?.id} onSelect={id=>setActiveComponent(id)}/>}
         {hasWorldDetails&&<>
         {activePreview?.error&&<button onClick={()=>setPreviewRetry(i=>i+1)}>重新预览</button>}
         {!aboard&&selected?.place?.description&&<p>{selected.place.description}</p>}
@@ -298,7 +363,7 @@ export function Game({me,onLogout,onAccessLost}:GameProps){
       {world&&<EmotePicker disabled={!connected||battle.active||aboard||character?.life!=='alive'} onSend={async code=>{try{await api('/emote',{code,version:world.version});}catch(e){setMessage((e as Error).message);}}}/>}
       {(!scenePosition||battle.active&&view==='world')&&<div className="map-bottom"><div className="legend"><span><i style={{background:'#abc781'}}/>平原</span><span><i style={{background:'#628b63'}}/>森林</span><span><i style={{background:'#909d8b'}}/>山地</span><span><i style={{background:'#80b7c0'}}/>河流</span><span><i style={{background:'#dbca91'}}/>道路</span></div><div className="position-pill"><LocateFixed size={14}/>{aboard?'乘船中':'当前位置'} <b>{own?.q??me.q}, {own?.r??me.r}</b></div></div>}
       {message&&world&&<div className="toast" role="status">{message}<button className="icon-button" aria-label="关闭提示" onClick={()=>setMessage('')}><X size={14}/></button></div>}
-    </main></div><footer className="statusbar"><span><i className="status-dot online"/>同一片大陆，共同探索</span><span>拖动平移 <b>·</b> 滚轮缩放 <b>·</b> 点击地块查看与前往</span><span>青屿 / 探索版 0.1</span></footer>
+    </main></div>
     {admin&&<Admin onClose={()=>setAdmin(false)} onRegenerate={reload}/>}
   </div>;
 }

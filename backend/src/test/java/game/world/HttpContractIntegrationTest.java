@@ -38,6 +38,63 @@ class HttpContractIntegrationTest {
         if(cookie!=null)request.header("Cookie",cookie);
         return client.send(request.GET().build(),HttpResponse.BodyHandlers.ofString());
     }
+
+    @Test void socketContainsSceneLootAndOnlyTheAuthenticatedInventory() throws Exception {
+        var first=world.register("wire_"+UUID.randomUUID().toString().substring(0,10),"contract-test-password");
+        var second=world.register("wire_"+UUID.randomUUID().toString().substring(0,10),"contract-test-password");
+        db.update("update accounts set approved=true,entered=true where id in (?,?)",first.id(),second.id());
+        var camp=world.clientMap().tiles().stream().filter(tile->tile.place()!=null&&tile.place().name().equals(SceneLoggingCamp.NAME)).findFirst().orElseThrow();
+        db.update("update accounts set q=?,r=? where id=?",camp.q(),camp.r(),first.id());
+        world.enterScene(first.id(),world.map().version());
+        db.update("insert into inventories(character_id,item_code,quantity) values(?,'camp_venom',7)",first.id());
+        assertEquals(401,get("/api/players",null).statusCode());
+        var a=socketState(first.username());
+        var b=socketState(second.username());
+        assertEquals("state",a.path("type").asText());
+        assertTrue(a.path("tick").isIntegralNumber());
+        assertTrue(a.path("battleRevision").isIntegralNumber());
+        assertTrue(a.path("serverTime").isIntegralNumber());
+        assertEquals(first.id().toString(),a.path("character").path("id").asText());
+        assertEquals(second.id().toString(),b.path("character").path("id").asText());
+        assertTrue(a.path("sceneLoot").isArray());
+        assertTrue(a.path("carriedCorpses").isArray());
+        assertTrue(a.path("sceneEffects").isArray());
+        assertTrue(a.path("sceneLoot").values().stream().anyMatch(item->item.path("kind").asText().equals("chest")));
+        assertTrue(a.path("inventory").values().stream().anyMatch(item->item.path("code").asText().equals("camp_venom")&&item.path("quantity").asInt()==7));
+        assertFalse(b.path("inventory").values().stream().anyMatch(item->item.path("code").asText().equals("camp_venom")&&item.path("quantity").asInt()>0));
+        assertFalse(b.has("sceneLoot"));
+        synchronized(world){
+            db.update("update characters set life='soul',hp=0 where id=?",first.id());
+            assertEquals(1,db.queryForObject("select count(*) from scene_positions where character_id=? and active",Integer.class,first.id()));
+            var mapper=tools.jackson.databind.json.JsonMapper.builder().build();
+            var soul=mapper.readTree(mapper.writeValueAsString(world.snapshot(first.id())));
+            assertEquals(first.id().toString(),soul.path("character").path("id").asText());
+            assertEquals(1,soul.path("players").size());
+            assertTrue(soul.path("scenePosition").isNull());
+            assertFalse(soul.has("sceneLoot"));
+            assertEquals(0,soul.path("loot").size());
+        }
+    }
+
+    private tools.jackson.databind.JsonNode socketState(String username) throws Exception {
+        var request=new MockHttpServletRequest();request.setRemoteAddr("127.0.0.1");
+        var response=new MockHttpServletResponse();
+        accounts.login(username,"contract-test-password",request,response);
+        String cookie=response.getHeader("Set-Cookie").split(";",2)[0];
+        var first=new java.util.concurrent.CompletableFuture<String>();
+        var socket=client.newWebSocketBuilder().header("Origin","http://localhost:5173").header("Cookie",cookie)
+            .buildAsync(URI.create("ws://127.0.0.1:"+port+"/ws"),new WebSocket.Listener(){
+                final StringBuilder message=new StringBuilder();
+                @Override public java.util.concurrent.CompletionStage<?> onText(WebSocket ws,CharSequence content,boolean last){
+                    message.append(content);
+                    if(last){first.complete(message.toString());message.setLength(0);}
+                    ws.request(1);
+                    return null;
+                }
+            }).get(5,java.util.concurrent.TimeUnit.SECONDS);
+        try{return tools.jackson.databind.json.JsonMapper.builder().build().readTree(first.get(5,java.util.concurrent.TimeUnit.SECONDS));}
+        finally{socket.sendClose(WebSocket.NORMAL_CLOSURE,"done");}
+    }
     Set<String> routes() {
         var result=new TreeSet<String>();
         mappings.getHandlerMethods().forEach((mapping,handler)-> {
@@ -98,15 +155,11 @@ class HttpContractIntegrationTest {
             String protocol=Files.readString(Path.of("../frontend/src/shared/protocol.ts"));
             var rows=mapper.readTree(mapper.writeValueAsString(world.inventory(a.id())));
             assertTrue(rows.isArray() && rows.size()>0, "Seeded item catalog must not be empty");
-            var declaration=java.util.regex.Pattern.compile("(?m)^export type Item=([^\\r\\n]+)").matcher(protocol);
-            assertTrue(declaration.find());
-            var fields=GameplaySerializationContractTest.requiredFields(declaration.group(1));
+            var fields=GameplaySerializationContractTest.declaredFields(protocol,"Item");
             for(var row:rows)for(String field:fields)
                 assertTrue(row.has(field), "Inventory JSON missing client field "+field);
             var state=mapper.readTree(mapper.writeValueAsString(world.snapshot(a.id())));
-            declaration=java.util.regex.Pattern.compile("(?m)^export type State=([^\\r\\n]+)").matcher(protocol);
-            assertTrue(declaration.find());
-            for(String field:GameplaySerializationContractTest.requiredFields(declaration.group(1)))
+            for(String field:GameplaySerializationContractTest.declaredFields(protocol,"State"))
                 assertTrue(state.has(field), "Socket state missing client field "+field);
             assertEquals("state",state.get("type").asText());
         } finally {db.update("delete from accounts where id=?",a.id());}

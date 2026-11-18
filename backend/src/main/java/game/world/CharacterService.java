@@ -71,6 +71,7 @@ public class CharacterService {
         db.update("insert into characters(id,kind,species,deployed,name,q,r,hp,max_hp,down_hp,max_down_hp,bind_q,bind_r,saved_at) values(?,'monster',?,true,?,?,?,12,12,6,6,?,?,?)",id,species,name,q,r,q,r,now);
         kit(id);return get(id);
     }
+    void respawnMonster(UUID id,long now){revive(id,now);kit(id);db.update("update characters set protected_until=0 where id=?",id);}
     private void give(UUID id,String code,int quantity){if(quantity<=0)return;equipment.give(id,code,quantity);}
     public EquipmentService.Loadout loadout(UUID id){return equipment.loadout(id);}
     public void requireAlive(UUID id){if(!get(id).alive())throw AccountService.bad("倒地或灵魂状态不能执行此行动");}
@@ -145,7 +146,7 @@ public class CharacterService {
         for(var c:all())if(c.kind().equals("monster")&&!engaged.contains(c.id)){var area=homeArea(c);if(area.isEmpty())continue;
             if(c.life.equals("dead")&&c.timerEnd<=now){
                 if(c.deployed)continue; // 管理员投放的怪不重生，只留尸体
-                var occupied=new HashSet<>(all().stream().filter(x->!x.id.equals(c.id)&&!x.life.equals("soul")&&!x.life.equals("dead")).map(Character::hex).toList());var free=new ArrayList<>(area.stream().filter(h->!occupied.contains(h)).toList());if(free.isEmpty())continue;Collections.shuffle(free);var h=free.getFirst();relocate(c.id,h.q(),h.r());revive(c.id,now);kit(c.id);db.update("update characters set protected_until=0 where id=?",c.id);changed=true;}
+                var occupied=new HashSet<>(all().stream().filter(x->!x.id.equals(c.id)&&!x.life.equals("soul")&&!x.life.equals("dead")).map(Character::hex).toList());var free=new ArrayList<>(area.stream().filter(h->!occupied.contains(h)).toList());if(free.isEmpty())continue;Collections.shuffle(free);var h=free.getFirst();relocate(c.id,h.q(),h.r());respawnMonster(c.id,now);changed=true;}
             else if(c.alive()&&db.queryForObject("select next_move from characters where id=?",Long.class,c.id)<=now){var options=new ArrayList<>(c.hex().neighbors().stream().filter(area::contains).filter(h->passageOpen.test(c.hex(),h)).toList());if(!options.isEmpty()){Collections.shuffle(options);var h=options.getFirst();relocate(c.id,h.q(),h.r());changed=true;}db.update("update characters set next_move=? where id=?",now+4000,c.id);}
         }return changed;
     }

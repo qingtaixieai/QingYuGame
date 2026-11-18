@@ -43,8 +43,8 @@ public class LootService {
         db.update("insert into loot_containers(id,kind,name,source_kind,source_id,world_version,q,r,created_at,expires_at,strength,agility,constitution,intellect,perception,willpower) values(?,'corpse',?,'monster',?,?,?,?,?,?,?,?,?,?,?,?)",id,c.name()+"的尸体",c.id(),version,c.q(),c.r(),now,now+GROUND_LIFETIME,c.strength(),c.agility(),c.constitution(),c.intellect(),c.perception(),c.willpower());
         db.update("update loot_containers set source_species=? where id=?",c.species(),id);
         db.update("update loot_containers set skinnable=exists(select 1 from creature_harvest where species=?) where id=?",c.species(),id);
-        db.update("update loot_containers c set battle_id=a.encounter_id,battle_q=a.q,battle_r=a.r from battle_actors a join battle_encounters b on b.id=a.encounter_id where c.id=? and a.account_id=? and b.active=true",id,c.id());
-        markScene(id,c.id());
+        int inBattle=db.update("update loot_containers c set scene_id=b.scene_id,battle_id=a.encounter_id,battle_q=a.q,battle_r=a.r from battle_actors a join battle_encounters b on b.id=a.encounter_id where c.id=? and a.account_id=? and b.active=true",id,c.id());
+        if(inBattle==0)markScene(id,c.id());
         if(!c.npc())db.update("update loot_containers set source_kind='player' where id=?",id);
         law.snapshot(id,c.id(),now);
         // Players keep their inventory/equipment; their unique corpse carries legal entitlement only.
@@ -67,7 +67,18 @@ public class LootService {
         for(var c:old){int cell=Math.floorMod(c.id().hashCode(),7);WorldMap.Hex h=cell==6?new WorldMap.Hex(0,0):BattleService.DIRECTIONS.get(cell);
             db.update("update loot_containers set battle_id=?,battle_q=?,battle_r=? where id=?",battle,h.q(),h.r(),c.id());}
     }
-    public void closeBattle(UUID id){db.update("update loot_containers set battle_id=null,battle_q=case when scene_id is null then null else battle_q end,battle_r=case when scene_id is null then null else battle_r end where battle_id=?",id);}
+    public void closeBattle(UUID id,UUID scene,Map<WorldMap.Hex,WorldMap.Hex> anchors){
+        for(var entry:anchors.entrySet()){
+            var from=entry.getKey();var to=entry.getValue();
+            db.update("update loot_containers set battle_q=?,battle_r=? where battle_id=? and battle_q=? and battle_r=?",to.q(),to.r(),id,from.q(),from.r());
+        }
+        db.update("""
+            update loot_containers set scene_id=coalesce(scene_id,?::uuid),battle_id=null,
+                battle_q=case when coalesce(scene_id,?::uuid) is null then null else battle_q end,
+                battle_r=case when coalesce(scene_id,?::uuid) is null then null else battle_r end
+            where battle_id=?
+            """,scene,scene,scene,id);
+    }
     private void markScene(UUID container,UUID actor){db.update("update loot_containers set scene_id=null,battle_q=null,battle_r=null where id=? and battle_id is null",container);db.update("update loot_containers c set scene_id=p.scene_id,battle_q=p.q,battle_r=p.r from scene_positions p where c.id=? and p.character_id=? and p.active",container,actor);}
     public boolean expire(long now){return db.update("delete from loot_containers c where carrier_id is null and expires_at<=? and not exists(select 1 from production_tasks t where t.corpse_id=c.id)",now)>0;}
     public void resetGround(){db.update("delete from loot_containers where carrier_id is null");}

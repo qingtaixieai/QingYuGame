@@ -85,8 +85,18 @@ function townLayout(cells:LocalCell[],doors:{cell:Hex}[],edges:BlockedEdge[],ent
 }
 
 /** Presentation only. Persisted walkability, blocked edges and door coordinates stay authoritative. */
-export function sceneArtCells(cells:LocalCell[],level:number|undefined,doors:{cell:Hex}[],name:string|undefined,edges:BlockedEdge[]=[],entry?:Hex):LocalCell[]{
+export function sceneArtCells(cells:LocalCell[],level:number|undefined,doors:{cell:Hex}[],name:string|undefined,edges:BlockedEdge[]=[],entry?:Hex,authored=false):LocalCell[]{
   if(level===3&&name?.endsWith('旅店')&&doors[0])return innLayout(cells,doors[0].cell,edges);
+  if(authored){
+    const doorstep=new Set(doors.map(door=>sceneKey(door.cell)));
+    return cells.map(cell=>{
+      if(cell.terrain==='wall'&&!cell.walkable)return {...cell,terrain:'building',art:'town-plot'};
+      if(sceneKey(cell)==='0,0')return {...cell,terrain:'plaza',art:'plaza-mark'};
+      if(sceneKey(cell)==='-3,3'&&cell.terrain==='furniture')return {...cell,terrain:'plaza'};
+      if(doorstep.has(sceneKey(cell)))return {...cell,art:'doorstep'};
+      return cell;
+    });
+  }
   if(level===2&&doors.length&&cells.length)return townLayout(cells,doors,edges,entry);
   return cells;
 }

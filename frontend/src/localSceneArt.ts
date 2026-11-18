@@ -10,7 +10,43 @@ export type LocalCell=Hex & {
   walkable:boolean;
   art?:'plaza-mark'|'doorstep'|'town-edge'|'town-plot'|'runner'|'lounge-rug';
 };
-const palette:Record<string,number[]>={street:[0xc6b58b,0xc8b78e],plaza:[0xd2c39e,0xd5c5a1],lobby:[0xc5aa80],lounge:[0xb39470],reception:[0xd0b58d],deep:[0x558e9e,0x639cac],shallow:[0x88b8b4,0x9bc6bb],building:[0xa4b586],bed:[0xcbb08a],shelf:[0xcbb08a],rug:[0xcab18b],grass:[0xb6c982,0xb2c680,0xbdcd89],plain:[0xb6c982,0xb2c680,0xbdcd89],forest:[0x9bb777,0x97b478,0xa2bb7b],dirt:[0xcbb383,0xd2b988],paving:[0xc5bf9b,0xd3caab],floor:[0xcbb08a,0xc4a47c],wall:[0x8f745f],furniture:[0x997954],water:[0x78afba,0x80b5bd],sand:[0xd8c597,0xdfcda1],rock:[0x9fa695,0xa9ad98],bridge:[0xc9ad80]};
+const sceneryTerrains=new Set(['grass','plain','forest','dirt','rock','sand','floor','lobby','lounge']);
+
+export function drawSceneScenery(layer:Container,cells:LocalCell[],sceneId:string,radius:number,reserved:ReadonlySet<string>,town:boolean,indoor:boolean){
+  const seed=Array.from(sceneId).reduce((value,char)=>Math.imul(value^char.charCodeAt(0),16777619),2166136261);
+  const decor=layer.addChild(new Graphics());
+  for(const cell of cells){
+    const distance=Math.max(Math.abs(cell.q),Math.abs(cell.r),Math.abs(cell.q+cell.r));
+    if(distance>=radius-1||!cell.walkable||cell.art||reserved.has(cellKey(cell))||!sceneryTerrains.has(cell.terrain))continue;
+    const patch=hash({q:Math.floor(cell.q/3),r:Math.floor(cell.r/3)})^seed;
+    const variant=(hash(cell)^seed)>>>0;
+    if((patch>>>0)%4!==0||variant%3!==0)continue;
+    const p=scenePoint(cell),x=p.x+(variant%15)-7,y=p.y+(variant%11)-5;
+    if(indoor){
+      block(decor,x-10,y-2,20,5,0xbc9877);
+      block(decor,x-7,y-2,3,5,0xd6b895);block(decor,x+4,y-2,3,5,0xd6b895);
+    }else if(town&&variant%7===0){
+      block(decor,x-1,y-13,3,17,0x776147);
+      block(decor,x-8,y-14,16,7,0x59756b);block(decor,x-4,y-12,8,2,0xe2ce9e);
+    }else if(town||cell.terrain==='grass'||cell.terrain==='plain'){
+      if(town){block(decor,x-9,y+1,18,6,0x8b7650);block(decor,x-8,y-1,16,4,0x697f49);}
+      for(const [dx,dy] of [[-5,0],[0,-3],[6,1]]){
+        block(decor,x+dx,y+dy,2,5,0x769553);block(decor,x+dx-1,y+dy-2,4,3,variant%2?0xe6bdb0:0xf1d688);
+      }
+    }else if(cell.terrain==='forest'){
+      block(decor,x-10,y+3,20,4,0x806648);block(decor,x-8,y+1,15,3,0xa88561);
+      block(decor,x+5,y-6,2,7,0x567c53);block(decor,x+2,y-5,8,2,0x759b63);
+    }else if(cell.terrain==='sand'){
+      for(const dx of [-5,0,5]){
+        block(decor,x+dx,y-6,2,10,0x82934e);block(decor,x+dx-1,y-8,3,3,0xa28551);
+      }
+    }else{
+      block(decor,x-8,y+1,15,5,0x858d76);block(decor,x-6,y-2,10,4,0xa9ad94);
+      block(decor,x+8,y+5,4,3,0x9eaa86);
+    }
+  }
+}
+const palette:Record<string,number[]>={"camp-fence":[0x8f9d65],"camp-road":[0xc8ad7c,0xcdb382],"camp-trail":[0xb4af77,0xb9ad77],street:[0xc6b58b,0xc8b78e],plaza:[0xd2c39e,0xd5c5a1],lobby:[0xc5aa80],lounge:[0xb39470],reception:[0xd0b58d],deep:[0x558e9e,0x639cac],shallow:[0x88b8b4,0x9bc6bb],building:[0xa4b586],bed:[0xcbb08a],shelf:[0xcbb08a],rug:[0xcab18b],grass:[0xb6c982,0xb2c680,0xbdcd89],plain:[0xb6c982,0xb2c680,0xbdcd89],forest:[0x9bb777,0x97b478,0xa2bb7b],dirt:[0xcbb383,0xd2b988],paving:[0xc5bf9b,0xd3caab],floor:[0xcbb08a,0xc4a47c],wall:[0x8f745f],furniture:[0x997954],water:[0x78afba,0x80b5bd],sand:[0xd8c597,0xdfcda1],rock:[0x9fa695,0xa9ad98],bridge:[0xc9ad80]};
 const hash=({q,r}:Hex)=>((Math.imul(q+713,374761393)^Math.imul(r+997,668265263))>>>0);
 const block=(g:Graphics,x:number,y:number,w:number,h:number,color:number|string)=>g.rect(Math.round(x),Math.round(y),w,h).fill(color);
 const outdoorTerrain:Record<string,string>={grass:'plain',plain:'plain',forest:'forest',sand:'beach',rock:'mountain',deep:'ocean',shallow:'river',water:'river',bridge:'bridge'};
@@ -32,7 +68,19 @@ export function localTerrain(layer:Container,cells:LocalCell[],outer:(h:Hex)=>bo
     if(!exploration)g.stroke({color:0x607456,width:1,alpha:.25});
     // The shared district layer paints these finishes.
     if(exploration&&(cell.art==='town-plot'||['wall','inn-counter','bed','shelf','floor','lobby','lounge','reception','street','plaza'].includes(cell.terrain)))continue;
-    if(cell.terrain==='wall'||cell.terrain==='inn-counter'){
+    if(cell.terrain==='camp-fence'){
+      block(decor,x-25,y+7,50,7,0x77845b);
+      block(decor,x-25,y-11,49,6,0xa17a4f);
+      block(decor,x-22,y+1,48,5,0x795940);
+      for(const post of [-20,0,20]){
+        block(decor,x+post-3,y-18,7,29,0x634937);
+        block(decor,x+post-1,y-18,3,24,0xba9261);
+      }
+    }else if(cell.terrain==='camp-road'||cell.terrain==='camp-trail'){
+      const shade=cell.terrain==='camp-road'?0xa88d67:0x909161;
+      block(decor,x-14,y+8,7,2,shade);
+      block(decor,x+9,y-9,9,2,shade);
+    }else if(cell.terrain==='wall'||cell.terrain==='inn-counter'){
       hexShape(decor,cell,34).fill(0xa89074).stroke({color:0x634f44,width:3});
       block(decor,x-23,y-14,46,5,0xd7c0a0);block(decor,x-27,y+1,54,3,0x756151);block(decor,x-21,y+16,42,4,0x70574a);
       block(decor,x-9,y-10,3,12,0x756151);block(decor,x+9,y+4,3,12,0x756151);
@@ -90,6 +138,16 @@ export function localMarker(g:Graphics,h:Hex,kind:string,offset?:{x:number;y:num
   const x=center.x+(offset?.x??0),y=center.y+(offset?.y??0);
   g.ellipse(x,y+12,16,5).fill({color:0x415940,alpha:.25});
   if(kind==='door'){block(g,x-11,y-14,22,29,0x654c3d);block(g,x-8,y-12,16,25,0xb78b58);block(g,x+3,y+1,3,3,0xf4d282);}
+  else if(kind==='chest'){
+    block(g,x-15,y-11,30,22,0x48382d);
+    block(g,x-13,y-7,26,16,0xad7848);
+    block(g,x-13,y-10,26,6,0xc79b63);
+    block(g,x-13,y+1,26,3,0x76543a);
+    block(g,x-8,y-10,3,19,0x635b4b);
+    block(g,x+6,y-10,3,19,0x635b4b);
+    block(g,x-3,y-3,7,7,0xe8c36e);
+    block(g,x,y,2,3,0x67513d);
+  }
   else if(kind==='wood'){block(g,x-3,y-3,6,18,0x7a5b43);block(g,x-13,y-15,26,17,0x547452);block(g,x-8,y-23,17,17,0x78955e);block(g,x-6,y-19,9,5,0xa4b677);}
   else if(kind==='stone'||kind==='iron_ore'){block(g,x-13,y-3,27,14,0x788478);block(g,x-8,y-10,17,12,0xa9b1a0);block(g,x-7,y-8,9,3,0xd9dcc2);}
   else {block(g,x-8,y-3,17,13,kind==='corpse'?0x80543e:0x956c43);block(g,x-4,y-7,9,5,0xd9c89d);block(g,x-8,y+4,17,2,0x5b483c);}

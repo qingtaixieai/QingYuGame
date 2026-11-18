@@ -8,7 +8,7 @@ import './loot.css';
 
 const kindName=(k:string)=>k==='corpse'?'尸体':k==='chest'?'宝箱':'掉落堆';
 function Glyph({kind,size=24}:{kind:string;size?:number}){return kind==='corpse'?<Skull size={size}/>:<Package size={size}/>;}
-function remaining(expires:number|null,clock:number){if(expires===null)return '携带中 · 计时暂停';const s=Math.max(0,Math.ceil((expires-clock)/1000));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} 后消失`;}
+function remaining(expires:number|null,clock:number){if(expires===null)return '携带中 · 计时暂停';if(expires>=Number.MAX_SAFE_INTEGER)return '固定货箱';const s=Math.max(0,Math.ceil((expires-clock)/1000));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} 后消失`;}
 
 /** 地面遗留物列表：只列出当前格有哪些容器，点开进各自的独立页。 */
 export function LootPanel({version,battle,me,clock,revision,onOpenContainer,onClose}:{version:string;battle:BattleState;me:string;clock:number;revision:number;onOpenContainer:(id:string)=>void;onClose:()=>void}){
