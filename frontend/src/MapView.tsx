@@ -25,7 +25,7 @@ export const MapView=memo(function MapView(props:Props){
     const app=new Application();
     async function init(){
       await app.init({width:host.current!.clientWidth,height:host.current!.clientHeight,background:0xa5cdd0,antialias:false,resolution:Math.min(devicePixelRatio,2),autoDensity:true,preference:'webgl'});
-      if(disposed||!host.current){app.destroy(true,{children:true});return;}
+      if(disposed||!host.current){app.destroy({removeView:true,releaseGlobalResources:false},{children:true});return;}
       application.current=app;
       host.current!.appendChild(app.canvas);
       const scene=new Container(),ground=new Graphics(),roads=new Graphics(),decor=new Graphics(),markers=new Container(),selection=new Graphics(),hoverOutline=new Graphics(),routeLine=new Graphics(),actors=new Container();
@@ -219,7 +219,7 @@ export const MapView=memo(function MapView(props:Props){
       });
       const resize=new ResizeObserver(()=>{if(disposed||!host.current)return;const w=host.current.clientWidth,h=host.current!.clientHeight,dx=w-app.screen.width,dy=h-app.screen.height,wasFit=Math.abs(zoom-fitScale)<.001;app.renderer.resize(w,h);if(wasFit)fit();else{fitScale=Math.min(w/mapWidth,h/mapHeight);scene.x+=dx/2;scene.y+=dy/2;report();}});resize.observe(host.current!);
       if(!latest.current.active)app.ticker.stop();
-      cleanup=()=>{resize.disconnect();canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerleave',pointerLeave);unbind();props.controls.current=null;application.current=null;app.destroy(true,{children:true});};
+      cleanup=()=>{resize.disconnect();canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerleave',pointerLeave);unbind();props.controls.current=null;application.current=null;app.destroy({removeView:true,releaseGlobalResources:false},{children:true});};
     }
     init().catch(e=>{console.error(e);if(host.current)host.current.innerHTML='<div class="map-error">画面初始化失败，请开启浏览器硬件加速后刷新。</div>';});
     return()=>{disposed=true;cleanup();};

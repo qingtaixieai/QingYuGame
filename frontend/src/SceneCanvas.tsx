@@ -70,11 +70,12 @@ export function sceneActor(layer:Container,id:string,h:Hex){
 }
 export type DrawScene=(layer:Container)=>void;
 export type DrawSceneActivity=(layer:Container)=>((now:number)=>boolean)|undefined;
-export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,drawActivity,drawHighlights,drawOverlay,className,label,entryPulse,meteors,exitRing,canSelect,selectionMode,selection,numbers,ringClosing}:{
+export function SceneCanvas({host,camera,onCamera,onSelect,onHover,onCancelSelection,drawGround,drawActivity,drawHighlights,drawOverlay,className,label,entryPulse,meteors,exitRing,canSelect,selectionMode,selection,numbers,ringClosing}:{
   host:RefObject<HTMLDivElement|null>;camera:Camera;onCamera:(camera:Camera)=>void;onSelect:(h:Hex,point?:{x:number;y:number})=>void;
   onHover?:(h:Hex|null)=>void;drawGround:DrawScene;drawActivity?:DrawSceneActivity;drawHighlights?:DrawScene;drawOverlay:DrawScene;
   className:string;label:string;entryPulse?:{id:string;cell:Hex};
   selectionMode?:string;
+  onCancelSelection?:()=>void;
   selection?:CellSelection;
   canSelect?:(cell:Hex)=>boolean;
   numbers?:readonly CombatNumber[];
@@ -237,7 +238,7 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
     };
     void app.init({width:Math.max(1,node.clientWidth),height:Math.max(1,node.clientHeight),backgroundAlpha:0,antialias:true,resolution:Math.min(devicePixelRatio,2),autoDensity:true,autoStart:false,preference:'webgl'}).then(()=>{
       ready=true;
-      if(disposed){app.destroy(true,{children:true});return;}
+      if(disposed){app.destroy({removeView:true,releaseGlobalResources:false},{children:true});return;}
       const stage=new Container(),ground=new Container(),activity=new Container(),highlights=new Container(),overlay=new Container();
       stage.addChild(ground,activity,highlights,overlay);app.stage.addChild(stage);
       const canvas=app.canvas;canvas.style.display='block';canvas.style.pointerEvents='none';node.prepend(canvas);
@@ -259,7 +260,7 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
       cleanup=()=>{release();observer.disconnect();node.removeEventListener('wheel',wheel);node.removeEventListener('pointermove',move);node.removeEventListener('pointerleave',leave);};
       setSurface({app,stage,ground,activity,highlights,overlay});
     }).catch(()=>{if(!disposed)setFailed(true);});
-    return ()=>{disposed=true;cleanup();if(ready)app.destroy(true,{children:true});};
+    return ()=>{disposed=true;cleanup();if(ready)app.destroy({removeView:true,releaseGlobalResources:false},{children:true});};
   },[host]);
   useEffect(()=>{if(surface){surface.ground.removeChildren().forEach(node=>node.destroy({children:true}));drawGround(surface.ground);}},[surface,drawGround]);
   useEffect(()=>{
@@ -338,7 +339,7 @@ export function SceneCanvas({host,camera,onCamera,onSelect,onHover,drawGround,dr
     const directions:Record<string,Hex>={ArrowLeft:{q:-1,r:0},ArrowRight:{q:1,r:0},ArrowUp:{q:0,r:-1},ArrowDown:{q:0,r:1}};
     const h=focus.current??sceneHex(camera.center.x,camera.center.y),delta=directions[event.key];
     if(delta){event.preventDefault();focus.current={q:h.q+delta.q,r:h.r+delta.r};publishHover(focus.current);}
-    else if(event.key==='Escape'&&selection){event.preventDefault();selection.onCancel();}
+    else if(event.key==='Escape'&&(selection||onCancelSelection)){event.preventDefault();(selection?.onCancel??onCancelSelection)?.();}
     else if(event.key==='Enter'||event.key===' '){event.preventDefault();commitSelection(h);}
   }}>{failed&&<p role="alert">地图渲染初始化失败，请检查浏览器的图形加速。</p>}</div>;
 }

@@ -63,7 +63,7 @@ export function useCodexPictures(kind:string,ids:string[],world:boolean,worldTil
               pictures.set(keyFor(id,variant),picture);result[id]=picture;
             }finally{g.destroy();}
           }
-        }finally{app.destroy(true,{children:true});}
+        }finally{app.destroy({removeView:true,releaseGlobalResources:false},{children:true});}
       }
       if(!disposed)setLoaded({key:pageKey,pictures:result});
     }

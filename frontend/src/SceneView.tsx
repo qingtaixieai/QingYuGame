@@ -93,6 +93,8 @@ export function SceneView(props:Props){
   const [combat,setCombat]=useState<SceneBattleControls|null>(null);
   const inBattle=!!battleView;
   useEffect(()=>{if(inBattle)setExplorationTarget(null);},[inBattle]);
+  useEffect(()=>{setExplorationTarget(null);},[position.sceneId]);
+  useEffect(()=>{if(props.closingBattle||props.explorationCollapsed)setExplorationTarget(null);},[props.closingBattle,props.explorationCollapsed]);
   const alive=residents.some(resident=>resident.id===me&&resident.life==='alive');
   const [center,setCenter]=useState(()=>scenePoint(position)),[zoom,setZoom]=useState(1);
   const host=useRef<HTMLDivElement>(null),pending=useRef(false);
@@ -282,15 +284,20 @@ export function SceneView(props:Props){
   const enterAction=actionDoor&&atDoor&&<button className="primary" disabled={!ready||!actionDoor.open}
     onClick={()=>void action('/scene/door',{doorId:actionDoor.id})}>{enterLabel}</button>;
   const stopAction=<button className="primary" disabled={busy||!connected} onClick={()=>void action('/stop')}>停止移动</button>;
-  function moveToSelected(){
+  function moveToCell(target:Hex,hit?:typeof interactions[number]){
     if(!ready)return;
-    if(explorationTarget){onMessage('请先取消当前动作的选格');return;}
-    if(!selected){onMessage('请先选择要前往的格子');return;}
-    if(atCell){onMessage('已到达选中的格子');return;}
-    if(closedDoor){onMessage('门已关闭');return;}
-    if(planning){onMessage('正在查找路线…');return;}
-    if(!preview.length){onMessage(planError||'没有可达路线');return;}
-    void action('/scene/move',{q:selected.q,r:selected.r,adjacent:adjacentTarget});
+    const cell=index.get(cellKey(target));
+    if(!cell){onMessage('请选择地图内的格子');return;}
+    if(same(position,target)){onMessage('已在这个格子');return;}
+    const door=doors.find(item=>same(item.cell,target)&&(!hit||hit.id===item.id));
+    if(door?.open===false){onMessage('门已关闭');return;}
+    const terrain=shownTerrain.get(cellKey(target))??cell.terrain;
+    const facility=objects.some(item=>item.kind==='facility'&&same(item,target)&&(!hit||hit.id===item.id));
+    const counter=service==='inn'&&(!hit||hit.kind==='service')&&terrain==='inn-counter';
+    const adjacent=facility||counter;
+    if(!cell.walkable&&!adjacent){onMessage('这格无法通行');return;}
+    setExplorationTarget(null);
+    void action('/scene/move',{q:target.q,r:target.r,adjacent});
   }
   const serviceAction=showRoomService&&service==='inn'?restAction
     :showRoomService&&service==='shop'?<button className="primary" disabled={!ready||!keeper} onClick={onShop}>商店交易</button>:null;
@@ -411,11 +418,18 @@ export function SceneView(props:Props){
     <SceneCanvas host={host} camera={{center,zoom,span}} onCamera={next=>{setCenter(next.center);setZoom(next.zoom);}}
       className="scene-board" entryPulse={entryPulse} meteors={meteors} exitRing={battleView?.battle.exitCells??props.closingBattle?.exitCells} ringClosing={!!props.closingBattle} label={inBattle?'六边形战场':'场景六边格'} drawGround={ground} drawOverlay={inBattle&&combat?combatOverlay:overlay}
       drawActivity={drawActivity} drawHighlights={inBattle?combat?.drawHighlights:undefined} selection={selection}
-      selectionMode={inBattle?combat?.selectionMode:explorationTarget??"inspect"} canSelect={inBattle?combat?.canSelect:undefined} numbers={numbers} onHover={inBattle?combat?.onHover:undefined} onSelect={(h,point)=>{
+      selectionMode={inBattle?combat?.selectionMode:explorationTarget??"inspect"} onCancelSelection={explorationTarget==='move'?cancelSelection:undefined}
+      canSelect={inBattle?combat?.canSelect:explorationTarget==='move'?h=>!!index.get(cellKey(h))?.walkable:undefined} numbers={numbers} onHover={inBattle?combat?.onHover:undefined} onSelect={(h,point)=>{
         if(props.closingBattle)return;
         if(inBattle){combat?.onSelect(h);return;}
         const hit=point?hitInteraction(interactions,point,scenePoint):undefined;
         const target=hit?.cell??h;
+        if(explorationTarget==='move'){
+          setComponentId(hit?.id??null);
+          setSelected(index.has(cellKey(target))?target:null);
+          moveToCell(target,hit);
+          return;
+        }
         if(selected&&same(target,selected)&&componentId===(hit?.id??null))return;
         if(!selected||!same(target,selected)||componentId!==(hit?.id??null))setPreview([]);
         setComponentId(hit?.id??null);
@@ -428,17 +442,19 @@ export function SceneView(props:Props){
       <Hotbar exploration signature={JSON.stringify([hotbarRevision,fireballPreparation,position.sceneId])} connected={connected}
         busy={busy||moving} mode={explorationTarget??'inspect'} points={null} reaction={0} armor={0} onMessage={onMessage}
         onEdit={()=>setExplorationTarget(null)} onAction={entry=>{
-          if(entry.command==='equipment'){onEquipment();return;}
+          if(entry.command==='equipment'){cancelSelection();onEquipment();return;}
           if(['potion','antidote','bandage'].includes(entry.command)){
+            cancelSelection();
             void action('/character/action',{action:entry.command});return;
           }
-          if(entry.command==='move'){moveToSelected();return;}
+          if(entry.command==='move'){setExplorationTarget(mode=>mode==='move'?null:'move');return;}
           if(entry.command==='skill:fireball'&&fireballPreparation!=='READY'){
+            cancelSelection();
             void action('/scene/action',{action:entry.command,requestId:crypto.randomUUID()});return;
           }
           setExplorationTarget(entry.command==='quick-shot'?'attack':entry.command);
         }}
-        commands={selection&&<button onClick={selection.onCancel}>取消选格</button>}/></div></div>}
+        commands={explorationTarget&&<button onClick={cancelSelection}>取消选格</button>}/></div></div>}
     {!inBattle&&<MapChrome title={map?.name??'正在载入场景'} subtitle={map?.level===3?`${worldName} › ${map.name.split(' · ')[0]}`:worldName} zoom={Math.round(zoom*100)}
       onZoom={zoomBy} onFit={fit} onLocate={()=>locate(position)} onMessage={onMessage} toolsClass="scene-tools"/>}
     {error&&<div className="scene-error" role="alert">{error}<button onClick={()=>setReload(v=>v+1)}>重试</button></div>}
