@@ -35,9 +35,29 @@ public class LootService {
         if(x.carrierId()==null&&c.battleId()==null){var scene=db.queryForObject("select scene_id from loot_containers where id=?",UUID.class,id);if(!Objects.equals(scene,localScene(c.actor())))throw AccountService.bad("遗留物不在当前场景");if(scene!=null&&db.queryForObject("select count(*) from scene_positions where character_id=? and active and q=? and r=?",Integer.class,c.actor(),x.battleQ(),x.battleR())!=1)throw AccountService.bad("请走到遗留物所在格");}
         return x;
     }
-    public List<Map<String,Object>> contents(UUID id,Context c,long now){require(id,c,now);return db.queryForList("select d.*,i.quantity from loot_items i join item_definitions d on d.code=i.item_code where i.container_id=? order by d.code",id);}
+    public record Viewer(UUID token,UUID viewerId) {}
+    public Viewer open(UUID id,Context c,long now){
+        var x=require(id,c,now);if(!x.kind().equals("chest"))throw AccountService.bad("此对象无需打开货箱");
+        var rows=db.queryForList("select viewer_id,token from chest_views where container_id=?",id);
+        if(!rows.isEmpty()){var row=rows.getFirst();if(!c.actor().equals(row.get("viewer_id")))throw AccountService.bad("货箱正在被其他人查看");UUID token=UUID.randomUUID();db.update("update chest_views set token=?,opened_at=? where container_id=? and viewer_id=?",token,now,id,c.actor());return new Viewer(token,c.actor());}
+        release(c.actor());UUID token=UUID.randomUUID();
+        db.update("insert into chest_views values(?,?,?,?)",id,c.actor(),token,now);return new Viewer(token,c.actor());
+    }
+    public boolean close(UUID id,UUID actor,UUID token){return token!=null&&db.update("delete from chest_views where container_id=? and viewer_id=? and token=?",id,actor,token)>0;}
+    public void release(UUID actor){db.update("delete from chest_views where viewer_id=?",actor);}
+    public void restartViews(){db.update("delete from chest_views");}
+    private void requireViewer(Container x,Context c){if(x.kind().equals("chest")&&!Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from chest_views where container_id=? and viewer_id=?)",Boolean.class,x.id(),c.actor())))throw AccountService.bad("请先打开货箱，或等待其他人关闭");}
+    public Map<UUID,Map<String,Object>> views(){var out=new LinkedHashMap<UUID,Map<String,Object>>();for(var row:db.queryForList("select container_id,viewer_id from chest_views"))out.put((UUID)row.get("container_id"),Map.of("viewerId",row.get("viewer_id")));return out;}
+    public Map<UUID,Long> restocks(){var out=new LinkedHashMap<UUID,Long>();for(var row:db.queryForList("select chest_id,restock_at from scene_logging_camps where restock_at is not null"))out.put((UUID)row.get("chest_id"),((Number)row.get("restock_at")).longValue());return out;}
+    public boolean pruneViews(long now){boolean changed=false;for(var row:db.queryForList("select container_id,viewer_id from chest_views")){UUID actor=(UUID)row.get("viewer_id");try{
+        var charRow=db.queryForMap("select c.life,coalesce(a.q,c.q) as q,coalesce(a.r,c.r) as r from characters c left join accounts a on a.id=c.account_id where c.id=?",actor);if(!"alive".equals(charRow.get("life")))throw AccountService.bad("角色无法行动");
+        var battle=db.queryForList("select encounter_id,q,r from battle_actors where account_id=?",actor);
+        var ctx=new Context(actor,db.queryForObject("select world_version from loot_containers where id=?",String.class,row.get("container_id")),((Number)charRow.get("q")).intValue(),((Number)charRow.get("r")).intValue(),battle.isEmpty()?null:(UUID)battle.getFirst().get("encounter_id"),battle.isEmpty()?null:((Number)battle.getFirst().get("q")).intValue(),battle.isEmpty()?null:((Number)battle.getFirst().get("r")).intValue());
+        require((UUID)row.get("container_id"),ctx,now);
+    }catch(org.springframework.web.server.ResponseStatusException e){release(actor);changed=true;}}return changed;}
+    public List<Map<String,Object>> contents(UUID id,Context c,long now){requireViewer(require(id,c,now),c);return db.queryForList("select d.*,i.quantity from loot_items i join item_definitions d on d.code=i.item_code where i.container_id=? order by d.code",id);}
     public void createCorpse(CharacterService.Character c,String version,long now){
-        db.update("delete from production_tasks where actor_id=?",c.id());
+        release(c.id());
         db.update("update handovers set state='cancelled' where state='pending' and (sender=? or recipient=?)",c.id(),c.id());
         UUID id=UUID.randomUUID();
         db.update("insert into loot_containers(id,kind,name,source_kind,source_id,world_version,q,r,created_at,expires_at,strength,agility,constitution,intellect,perception,willpower) values(?,'corpse',?,'monster',?,?,?,?,?,?,?,?,?,?,?,?)",id,c.name()+"的尸体",c.id(),version,c.q(),c.r(),now,now+GROUND_LIFETIME,c.strength(),c.agility(),c.constitution(),c.intellect(),c.perception(),c.willpower());
@@ -62,7 +82,8 @@ public class LootService {
     }
     public void enterBattle(UUID battle,String version,int q,int r){
         var scene=db.queryForObject("select scene_id from battle_encounters where id=?",UUID.class,battle);
-        if(scene!=null){db.update("update loot_containers set battle_id=? where scene_id=? and carrier_id is null and battle_id is null",battle,scene);return;}
+        if(scene!=null){db.update("delete from chest_views where container_id in (select id from loot_containers where scene_id=?)",scene);db.update("update loot_containers set battle_id=? where scene_id=? and carrier_id is null and battle_id is null",battle,scene);return;}
+        db.update("delete from chest_views where container_id in (select id from loot_containers where world_version=? and q=? and r=?)",version,q,r);
         var old=query("where carrier_id is null and battle_id is null and world_version=? and q=? and r=?",version,q,r);
         for(var c:old){int cell=Math.floorMod(c.id().hashCode(),7);WorldMap.Hex h=cell==6?new WorldMap.Hex(0,0):BattleService.DIRECTIONS.get(cell);
             db.update("update loot_containers set battle_id=?,battle_q=?,battle_r=? where id=?",battle,h.q(),h.r(),c.id());}
@@ -96,6 +117,7 @@ public class LootService {
             return;
         }
         var x=require(cmd.containerId(),c,now);
+        if(Set.of("take","takeAll").contains(cmd.action()))requireViewer(x,c);
         if(db.queryForObject("select exists(select 1 from production_tasks where corpse_id=?)",Boolean.class,x.id()))throw AccountService.bad("尸体正在剥皮，请先取消任务");
         switch(cmd.action()){
             case "carry" -> {

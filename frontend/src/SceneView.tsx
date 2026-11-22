@@ -1,10 +1,13 @@
+import {createActionFeedback} from './components/ActionFeedback';
+import {productionProgress} from './shared/actionProgress';
+import type {ActionResult,ChestView} from './shared/protocol';
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {Graphics} from 'pixi.js';
+import {Container,Graphics} from 'pixi.js';
 import {api} from './api';
 import {Hotbar} from './Hotbar';
 import {BattleView,type BattleViewProps,type SceneBattleControls,type SceneBattleMap} from './BattleView';
 import {arrangeInteractions,hitInteraction,interactionOffsets,paintInteractionPins,type CellInteraction} from './cellInteractions';
-import {PlaceActions,PlaceComponents} from './PlaceActions';
+import {PlaceActions,PlaceComponents,ActionProgressCard} from './PlaceActions';
 import {terrainModules} from './sceneModules';
 import {MapChrome} from './MapChrome';
 import {SceneCanvas,sceneActor,actorSpriteLabel,cellKey,hexShape,sceneLabel,scenePoint,type DrawScene,type DrawSceneActivity} from './SceneCanvas';
@@ -26,6 +29,7 @@ export type SceneResident=Hex&{id:string;username:string;life:string;hp:number;m
 export type SceneDoor={id:string;name:string;cell:Hex;destinationScene:string;destination:Hex;open:boolean};
 type SceneMap={level:number;id:string;worldVersion:string;generationVersion?:number;name:string;radius:number;owner:Hex;cells:LocalCell[];blockedEdges:BlockedEdge[]};
 type Props={
+  results?:ActionResult[];carriedCorpses?:LootContainer[];chestViews?:Record<string,ChestView>;chestRestocks?:Record<string,number>;
   position:ScenePosition;doors:SceneDoor[];service:string|null;onShop:()=>void;onRest:()=>void;
   objects:SceneObject[];onFacility:(o:SceneObject)=>void;residents:SceneResident[];players:Player[];loot:LootContainer[];
   onLoot:(id:string)=>void;moving:boolean;connected:boolean;me:string;onMessage:(s:string)=>void;onBattle:(id:string)=>void;
@@ -181,6 +185,17 @@ export function SceneView(props:Props){
       sceneLabel(layer,map?.level===3?'返回街道':shortName(door.name),x,y+(map?.level===2?20:33));
     }
   },[artCells,map,doors,index,sceneryReserved,authored,townAtlas]);
+  const progress=map?productionProgress(production?.task,{me,version:map.worldVersion,world:map.owner,sceneId:position.sceneId,actor:position,objects,loot:[...loot,...(props.carriedCorpses??[])]}):null;
+  const rememberedLoot=useRef<{scene:string;items:Map<string,LootContainer>}>({scene:position.sceneId,items:new Map()});
+  if(rememberedLoot.current.scene!==position.sceneId)rememberedLoot.current={scene:position.sceneId,items:new Map()};
+  for(const item of [...loot,...(props.carriedCorpses??[])])rememberedLoot.current.items.set(item.id,item);
+  while(rememberedLoot.current.items.size>128)rememberedLoot.current.items.delete(rememberedLoot.current.items.keys().next().value!);
+  const rememberedTargets=useRef<{scene:string;items:Map<string,typeof interactions[number]>}>({scene:position.sceneId,items:new Map()});
+  if(rememberedTargets.current.scene!==position.sceneId)rememberedTargets.current={scene:position.sceneId,items:new Map()};
+  for(const item of interactions)rememberedTargets.current.items.set(item.id,item);
+  while(rememberedTargets.current.items.size>128)rememberedTargets.current.items.delete(rememberedTargets.current.items.keys().next().value!);
+  const feedbackFrame=useRef({clock,at:performance.now(),progress,results:props.results??[]});
+  feedbackFrame.current={clock,at:performance.now(),progress,results:props.results??[]};
   const drawActivity=useCallback<DrawSceneActivity>(layer=>{
     const motion=!inBattle&&!window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const pulses=stonePulses?.sceneId===position.sceneId?stonePulses:null;
@@ -193,12 +208,15 @@ export function SceneView(props:Props){
       if(!index.has(cellKey(object))||object.depleted&&!pulse)continue;
       const shaking=motion&&object.kind==='resource'&&(object.inUse||pulse);
       const sprite=shaking?layer.addChild(new Graphics()):idle;
-      localMarker(sprite,object,object.code,interactionOffsets[object.id]);
+      const pin=interactionById.get(object.id);
+      localMarker(sprite,object,object.code,pin?.visible?pin.offset:interactionOffsets[object.id]);
       if(shaking)animated.push({sprite,pulseId:pulse?object.id:undefined});
     }
-    if(!animated.length)return;
+    const feedback=createActionFeedback(layer.addChild(new Container()),scenePoint);
     return now=>{
-      let active=false;
+      const latest=feedbackFrame.current;
+      const activeFeedback=!inBattle&&map?feedback({clock:latest.clock+now-latest.at,progress:latest.progress,results:latest.results,me,version:map.worldVersion,world:map.owner,sceneId:position.sceneId,actor:position,loot:[...rememberedLoot.current.items.values()],targets:[...rememberedTargets.current.items.values()]}):false;
+      let active=activeFeedback;
       for(const {sprite,pulseId} of animated){
         let until=Infinity;
         if(pulseId&&pulses){
@@ -211,7 +229,7 @@ export function SceneView(props:Props){
       }
       return active;
     };
-  },[inBattle,stonePulses,position.sceneId,objects,index]);
+  },[inBattle,stonePulses,position.sceneId,position.q,position.r,objects,index,interactions,interactionById,map,me,progress?.id,props.results]);
   const profiles=useMemo(()=>new Map(players.map(player=>[player.id,player])),[players]);
   const overlay=useCallback<DrawScene>(layer=>{
     const g=new Graphics();layer.addChild(g);
@@ -458,7 +476,15 @@ export function SceneView(props:Props){
     {!inBattle&&<MapChrome title={map?.name??'正在载入场景'} subtitle={map?.level===3?`${worldName} › ${map.name.split(' · ')[0]}`:worldName} zoom={Math.round(zoom*100)}
       onZoom={zoomBy} onFit={fit} onLocate={()=>locate(position)} onMessage={onMessage} toolsClass="scene-tools"/>}
     {error&&<div className="scene-error" role="alert">{error}<button onClick={()=>setReload(v=>v+1)}>重试</button></div>}
-    {map&&!inBattle&&<PlaceActions title={targetName} subtitle={status} primary={primary} secondary={<>{secondary}<span ref={props.onSocialHost}/></>}
+    {map&&!inBattle&&<PlaceActions title={targetName} subtitle={status} primary={primary} progress={<>
+      {progress&&selected&&same(selected,progress.cell)&&
+        (progress.personal?(!chosenComponent||chosenComponent.kind==='service'):componentId===progress.targetId||!componentId&&cellComponents.length<=1)&&
+        <ActionProgressCard action={progress} clock={clock} disabled={busy||!connected} onStop={()=>void action('/production/cancel')}/>}
+      {focusedLoot?.kind==='chest'&&<p className="chest-view-status" aria-live="polite">
+        {props.chestViews?.[focusedLoot.id]?(props.chestViews[focusedLoot.id].viewerId===me?'你正在查看':'有人正在查看'):'货箱可查看'}
+        {props.chestRestocks?.[focusedLoot.id]?` · ${props.chestRestocks[focusedLoot.id]>clock?`补货剩 ${Math.ceil((props.chestRestocks[focusedLoot.id]-clock)/1000)} 秒`:'补货已就绪，等待关闭货箱'}`:''}
+      </p>}
+    </>} secondary={<>{secondary}<span ref={props.onSocialHost}/></>}
       choices={<PlaceComponents items={cellComponents} selected={componentId} onSelect={id=>{if(id!==componentId){setPreview([]);setComponentId(id);}}}/>}
       onClose={selected?()=>{setSelected(null);setComponentId(null);}:undefined}>
       {service==='inn'&&showRoomService&&!resting&&<p>{keeper?'停下后可休整 · 5 铜币 · 10 秒':'掌柜暂时无法提供服务'}</p>}

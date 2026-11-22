@@ -2,6 +2,7 @@
   "baseline": "f7f831a",
   "scope": "HTTP method/path inventory; schemas remain in docs/前后端接口文档.md",
   "routes": [
+    "GET /api/action-results",
     "GET /api/admin/accounts",
     "GET /api/admin/accounts/{id}/inventory",
     "GET /api/admin/bans",
@@ -78,6 +79,8 @@
     "POST /api/logistics/stop/{target}",
     "POST /api/logout",
     "POST /api/loot/action",
+    "POST /api/loot/{id}/open",
+    "POST /api/loot/{id}/close",
     "POST /api/move",
     "POST /api/production/cancel",
     "POST /api/production/start",

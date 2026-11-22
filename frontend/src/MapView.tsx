@@ -1,3 +1,7 @@
+import {createActionFeedback} from './components/ActionFeedback';
+import {productionProgress,worldProgress} from './shared/actionProgress';
+import type {ProductionState} from './shared/production';
+import type {ActionResult} from './shared/protocol';
 import type {LootContainer,BlockedEdge} from './types';
 import {bindMapGestures} from './mapGestures';
 import { memo, useEffect, useRef } from 'react';
@@ -15,7 +19,7 @@ import {advanceRenderClock,ferryRouteProgress} from './ferryMotion';
 const SIZE=25, SQRT3=Math.sqrt(3);
 export const position=(h:Hex)=>({x:SQRT3*SIZE*(h.q+h.r/2),y:1.5*SIZE*h.r});
 export type MapControls={zoom:(factor:number)=>void;fit:()=>void;locate:(h:Hex)=>void};
-type Props={blockedEdges?:BlockedEdge[];loot:LootContainer[];deathMark:Hex|null;active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];interactions:ArrangedInteraction[]; activeComponent:string|null; onSelect:(tile:Tile,componentId?:string)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
+type Props={carriedCorpses?:LootContainer[];production?:ProductionState|null;results?:ActionResult[];blockedEdges?:BlockedEdge[];loot:LootContainer[];deathMark:Hex|null;active:boolean;ferry:FerryState|null;world:World;battles:BattleSummary[];emotes:Emote[];resources:ResourceNode[];actions:WorldAction[];clockOffset:number;players:Player[];me:string;selected:Tile|null;route:Hex[];interactions:ArrangedInteraction[]; activeComponent:string|null; onSelect:(tile:Tile,componentId?:string)=>void;onZoom:(zoom:number)=>void;controls:React.RefObject<MapControls|null>};
 export const MapView=memo(function MapView(props:Props){
   const host=useRef<HTMLDivElement>(null), latest=useRef(props), application=useRef<Application|null>(null);
   latest.current=props;
@@ -34,6 +38,8 @@ export const MapView=memo(function MapView(props:Props){
       const passageMarks=new Graphics();scene.addChild(passageMarks);let passageSignature='';
       const lootLayer=new Container();scene.addChild(lootLayer);let lootSignature='';
       const interactionLayer=new Container();scene.addChild(interactionLayer);
+      const rememberedLoot=new Map<string,LootContainer>();
+      const feedback=createActionFeedback(scene.addChild(new Container()),position);
       let previousInteractions:ArrangedInteraction[]|null=null,previousComponent:string|null=null;
       let battleSignature="",deathSignature="";
       const deathMarker=new Container();scene.addChild(deathMarker);
@@ -211,9 +217,17 @@ export const MapView=memo(function MapView(props:Props){
             if(entity.emoteCode!==emote.code){entity.emoteCode=emote.code;drawEmoteBubble(entity.bubble,emote.code);}
             entity.bubble.alpha=Math.min(1,(emote.expiresAt-now)/250);
           }
-          const action=current.actions.find(a=>a.accountId===id),barPixels=action?Math.round(36*Math.max(0,Math.min(1,(now-action.startedAt)/(action.endsAt-action.startedAt)))):-1;
-          if(barPixels!==entity.barPixels){entity.barPixels=barPixels;entity.bar.clear();if(action){entity.bar.roundRect(-19,-43,38,6,2).fill(0x354d40);entity.bar.roundRect(-18,-42,barPixels,4,1).fill(0xe8c875);}}
           const f=Math.min(1,ticker.deltaMS/100);entity.container.x+=(entity.target.x-entity.container.x)*f;entity.container.y+=(entity.target.y-entity.container.y)*f;}
+        const self=current.players.find(p=>p.id===current.me);
+        if(self){
+          for(const item of [...current.loot,...(current.carriedCorpses??[])])rememberedLoot.set(item.id,item);
+          while(rememberedLoot.size>128)rememberedLoot.delete(rememberedLoot.keys().next().value!);
+          const allLoot=[...current.loot,...(current.carriedCorpses??[])];
+          const resultLoot=[...rememberedLoot.values()];
+          const progress=productionProgress(current.production?.task,{me:current.me,version:current.world.version,world:self,sceneId:null,actor:self,objects:current.resources,loot:allLoot})
+            ??worldProgress(current.actions.find(a=>a.accountId===current.me),current.me,current.resources);
+          feedback({clock:now,progress,results:current.results??[],me:current.me,version:current.world.version,world:self,sceneId:null,actor:self,loot:resultLoot,targets:current.interactions.map(target=>({...target,visible:false}))});
+        }
         if(previousSelected!==current.selected){selection.clear();previousSelected=current.selected;if(current.selected){const p=position(current.selected);hex(selection,p.x,p.y,SIZE-1).fill({color:0xfff3be,alpha:.22}).stroke({color:0xfff5cd,width:2.2});}}
         if(previousRoute!==current.route||previousPlayers!==current.players){previousRoute=current.route;routeLine.clear();for(const h of current.route){const p=position(h);routeLine.circle(p.x,p.y,2.5).fill(0xfdf8df);}}
       });

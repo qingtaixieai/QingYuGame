@@ -2,8 +2,8 @@ import type {State} from './protocol';
 
 type WorldSocketMessage=State|{type:'chat-changed'};
 const requiredLists=['players','resources','actions'];
-const optionalLists=['emotes','battles','inventory','loot','sceneLoot','carriedCorpses','sceneDoors','sceneObjects','sceneResidents','sceneEffects','blockedEdges'];
-const optionalObjects=['ferry','scenePosition','production'];
+const optionalLists=['emotes','battles','inventory','loot','sceneLoot','carriedCorpses','sceneDoors','sceneObjects','sceneResidents','sceneEffects','blockedEdges','actionResults'];
+const optionalObjects=['ferry','scenePosition','production','chestViews','chestRestocks'];
 const finiteNumberFields=['tick','serverTime','battleRevision'];
 
 function isObject(value:unknown):value is Record<string,unknown>{

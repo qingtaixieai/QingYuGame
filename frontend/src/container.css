@@ -40,3 +40,5 @@
 .container-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 @media(max-width:560px){.container-body{grid-template-columns:1fr}.container-portrait{padding:16px}}
 @media(max-height:600px) and (orientation:landscape){.container-page{max-height:calc(100dvh - 12px)}.container-head{padding:10px 14px}.container-body{padding:10px 14px;grid-template-columns:120px minmax(0,1fr)}.container-portrait{padding:14px}.container-foot{padding:8px 14px}}
+
+.container-retry{display:block;margin-top:10px}

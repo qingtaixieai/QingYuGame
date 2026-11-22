@@ -16,3 +16,5 @@
 .journey-log ol{margin:8px 0;padding-left:16px}
 .journey-log li{padding:5px 0;font-size:12px;border-bottom:1px solid #dbe2d2}
 .journey-log time{color:#667666;font-variant-numeric:tabular-nums}
+.action-result-history li[data-outcome="failure"]{color:#9d4440}
+.action-result-history li[data-outcome="cancelled"]{color:#69736a}

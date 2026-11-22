@@ -15,6 +15,12 @@ public class EconomyController {
         this.world=world;
     }
 
+    record ChestOpen(String version,UUID battleId) {}
+    record ChestClose(UUID token) {}
+    @GetMapping("/action-results") public Object actionResults(HttpServletRequest req){return world.actionResults(accounts.require(req,true,false).id());}
+    @PostMapping("/loot/{id}/open") public Object openChest(@PathVariable UUID id,@RequestBody ChestOpen body,HttpServletRequest req){return world.openChest(accounts.require(req,true,false).id(),id,body.version(),body.battleId());}
+    @PostMapping("/loot/{id}/close") public Object closeChest(@PathVariable UUID id,@RequestBody ChestClose body,HttpServletRequest req){world.closeChest(accounts.require(req,true,false).id(),id,body.token());return Map.of("message","货箱已关闭");}
+
     record HandoverCancel(UUID offerId) {}
 
     @GetMapping("/handover") public Object handovers(HttpServletRequest req){return world.handovers(accounts.require(req,true,false).id());}

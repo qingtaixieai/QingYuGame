@@ -12,7 +12,7 @@ import static game.world.WorldMap.distance;
 final class SceneLoggingCamp {
     static final String NAME="废弃伐木营";
     static final String MATERIAL="camp_venom";
-    static final long RESTOCK_MS=15*60_000;
+    static final long RESTOCK_MS=5*60_000;
     static final WorldMap.Hex CHEST=new WorldMap.Hex(3,0);
     static final List<WorldMap.Hex> PATROL=List.of(new WorldMap.Hex(-1,0),
         new WorldMap.Hex(0,0),new WorldMap.Hex(1,0),new WorldMap.Hex(0,1),new WorldMap.Hex(0,0));
@@ -88,7 +88,7 @@ final class SceneLoggingCamp {
         for(var camp:read("")){
             var players=runtime.residents(camp.scene()).stream()
                 .anyMatch(p->online.contains(p.characterId())&&!characters.get(p.characterId()).life().equals("soul"));
-            if(!players)changed=restock(camp,now)||changed;
+            changed=restock(camp,now)||changed;
             var actor=camp.monster();
             if(engaged.contains(actor))continue;
             var monster=characters.get(actor);
@@ -141,6 +141,7 @@ final class SceneLoggingCamp {
             where chest_id=? and restock_at is null and not exists(select 1 from loot_items where container_id=?)
             """,now+RESTOCK_MS,chest,chest);
     }
+    void released(long now){for(var camp:read(""))restock(camp,now);}
     private void fill(UUID chest){
         db.update("insert into loot_items(container_id,item_code,quantity) values(?,?,2) on conflict do nothing",chest,MATERIAL);
     }
@@ -149,12 +150,12 @@ final class SceneLoggingCamp {
         return db.update("""
             with due as (
                 update scene_logging_camps set restock_at=null where scene_id=? and restock_at<=?
-                  and not exists(select 1 from battle_encounters where scene_id=? and active)
+                  and not exists(select 1 from chest_views v where v.container_id=scene_logging_camps.chest_id)
                 returning chest_id
             )
             insert into loot_items(container_id,item_code,quantity)
             select chest_id,?,2 from due on conflict do nothing
-            """,camp.scene(),now,camp.scene(),MATERIAL)>0;
+            """,camp.scene(),now,MATERIAL)>0;
     }
     private Camp find(UUID scene){return read("where scene_id=?",scene).stream().findFirst().orElse(null);}
     private List<Camp> read(String clause,Object... args){

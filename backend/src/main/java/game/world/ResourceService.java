@@ -10,6 +10,8 @@ import java.util.*;
 public class ResourceService {
     public record Node(UUID id,String kind,int q,int r,long readyAt) {}
     public record Action(UUID accountId,String kind,UUID nodeId,int q,int r,long startedAt,long endsAt) {}
+    @org.springframework.beans.factory.annotation.Autowired private ProductionResults results;
+    @org.springframework.beans.factory.annotation.Autowired private SceneService scenes;
     private final JdbcTemplate db;
     private final long chopMs,treeMs,stoneMs;
     ResourceService(JdbcTemplate db,@Value("${game.chop-ms:3000}") long chopMs,
@@ -33,7 +35,8 @@ public class ResourceService {
     }
     private void insert(String kind,WorldMap.Tile t){db.update("insert into resource_nodes(id,kind,q,r) values(?,?,?,?)",UUID.randomUUID(),kind,t.q(),t.r());}
     public void reset(WorldMap world){db.update("delete from world_actions");db.update("delete from resource_nodes");initialize(world);}
-    public void cancel(UUID id){db.update("delete from world_actions where account_id=?",id);}
+    public void cancel(UUID id){for(var a:actions())if(a.accountId().equals(id))result(a,"cancelled","采集已中断",List.of(),System.currentTimeMillis());db.update("delete from world_actions where account_id=?",id);}
+    private void result(Action a,String outcome,String message,List<ProductionResults.Item> items,long now){results.record(new ProductionService.Task(a.accountId(),a.kind(),null,a.nodeId(),null,null,scenes.version(),a.q(),a.r(),null,null,a.startedAt(),a.endsAt(),1,0),outcome,message,items,now);}
     private void award(UUID id,String item){db.update("insert into inventories(character_id,item_code,quantity) values(?,?,1) on conflict(character_id,item_code) do update set quantity=inventories.quantity+1",id,item);}
     public String collect(UUID id,int q,int r,long now){
         Node node=nodes().stream().filter(n->n.q==q&&n.r==r).findFirst().orElseThrow(()->AccountService.bad("这里没有可采集的资源"));
@@ -41,7 +44,7 @@ public class ResourceService {
         if(actions().stream().anyMatch(a->a.accountId.equals(id)))throw AccountService.bad("你已有正在进行的行动");
         if(actions().stream().anyMatch(a->a.nodeId.equals(node.id)))throw AccountService.bad("有人正在砍伐这片森林");
         if(node.kind.equals("stone")){
-            award(id,"stone");db.update("update resource_nodes set ready_at=? where id=?",now+stoneMs,node.id);return "石头 +1";
+            award(id,"stone");db.update("update resource_nodes set ready_at=? where id=?",now+stoneMs,node.id);result(new Action(id,"gather",node.id,q,r,now,now),"success","石头 +1",List.of(new ProductionResults.Item("stone",1)),now);return "石头 +1";
         }
         db.update("insert into world_actions values(?,?,?,?,?,?,?)",id,"chop",node.id,q,r,now,now+chopMs);
         return "开始砍伐";
@@ -51,7 +54,7 @@ public class ResourceService {
         for(Action a:actions())if(a.endsAt<=now){
             // Reward and action deletion share a transaction: never duplicate a reward after a restart.
             award(a.accountId,"wood");db.update("update resource_nodes set ready_at=? where id=?",a.endsAt+treeMs,a.nodeId);
-            cancel(a.accountId);changed=true;
+            db.update("delete from world_actions where account_id=?",a.accountId);result(a,"success","木头 +1",List.of(new ProductionResults.Item("wood",1)),now);changed=true;
         }
         var nodes=nodes();Set<WorldMap.Hex> occupied=new HashSet<>();nodes.forEach(n->occupied.add(new WorldMap.Hex(n.q,n.r)));
         for(Node n:nodes)if(n.readyAt>0&&n.readyAt<=now){

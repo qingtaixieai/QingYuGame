@@ -10,6 +10,13 @@ export type Weapon={code:string;name:string;shape:string;minRange:number;maxRang
 export type Character=Hex&{id:string;kind:string;species:string|null;name:string;life:'alive'|'down'|'soul'|'dead';hp:number;maxHp:number;downHp:number;maxDownHp:number;strength:number;agility:number;constitution:number;intellect:number;perception:number;willpower:number;weapon:string|null;offhand:string|null;body:string|null;bindQ:number;bindR:number;deathQ:number|null;deathR:number|null;timerKind:string|null;timerEnd:number;protectedUntil:number};
 export type ResourceNode=Hex&{id:string;kind:'wood'|'stone';readyAt:number};
 export type WorldAction=Hex&{accountId:string;kind:string;nodeId:string;startedAt:number;endsAt:number};
+export type ActionResult={
+  id:string;actor:string;kind:string;outcome:'success'|'failure'|'cancelled';
+  objectId:string|null;corpseId:string|null;sceneId:string|null;version:string;
+  worldQ:number;worldR:number;q:number|null;r:number|null;personal?:boolean;happenedAt:number;
+  message:string;items:{code:string;quantity:number}[];
+};
+export type ChestView={viewerId:string};
 export type Emote={accountId:string;code:string;startedAt:number;expiresAt:number};
 export type BattleSummary=Hex&{id:string;participants:number};
 export type EquipmentItem={code:string;name:string;description:string;kind:string;handUsage:string;passiveArmor:number;guardReduction:number;guardMinDamage:number;grantsAttack:boolean};
@@ -28,6 +35,7 @@ export type State={
   loot?:LootContainer[];sceneLoot?:LootContainer[];carriedCorpses?:LootContainer[];
   sceneEffects?:SceneEffect[];fireballPreparation?:string;blockedEdges?:BlockedEdge[];
   production?:import('./production').ProductionState|null;
+  actionResults?:ActionResult[];chestViews?:Record<string,ChestView>;chestRestocks?:Record<string,number>;
   sceneObjects?:import('./production').SceneObject[];sceneDoors?:import('./scene').SceneDoor[];
   sceneService?:string|null;scenePosition?:import('./scene').ScenePosition|null;
   sceneResidents?:import('./scene').SceneResident[];sceneMoving?:boolean;

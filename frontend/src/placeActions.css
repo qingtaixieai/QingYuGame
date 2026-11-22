@@ -43,3 +43,7 @@
 @media(max-height:600px) and (orientation:landscape) {
   .place-components button {min-height:44px}
 }
+
+.place-action-progress{padding:9px 0;border-top:1px solid #a5ac9944;display:flex;flex-wrap:wrap;align-items:center;gap:7px}
+.place-action-progress>div{width:100%;display:flex;flex-wrap:wrap;justify-content:space-between;gap:5px;font-size:12px}
+.place-action-progress progress{flex:1;min-width:70px;height:9px;accent-color:#779466}

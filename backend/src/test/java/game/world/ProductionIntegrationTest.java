@@ -89,7 +89,7 @@ class ProductionIntegrationTest {
   });
  }}
  @Autowired SceneLoggingCamp camps;
- @Test void loggingCampUsesOneSharedChestAndRestocksOnlyAfterLeaving(){synchronized(world){
+ @Test void loggingCampUsesOneSharedChestAndRestocksAfterViewerCloses(){synchronized(world){
   UUID first=actor(),second=actor();
   var map=world.map();
   var site=SceneLoggingCamp.site(map).orElseThrow();
@@ -108,15 +108,19 @@ class ProductionIntegrationTest {
   var take=new LootService.Command("takeAll",chest,null,null,map.version(),null,null);
   assertThrows(RuntimeException.class,()->world.lootCommand(first,take));
   runtime.put(first,campsite.id(),SceneLoggingCamp.CHEST);
+  var firstView=world.openChest(first,chest,map.version(),null);
   world.lootCommand(first,take);
   assertEquals(2,equipment.available(first,SceneLoggingCamp.MATERIAL));
+  world.closeChest(first,chest,firstView.token());
   runtime.leave(first);
   runtime.put(second,campsite.id(),SceneLoggingCamp.CHEST);
+  var secondView=world.openChest(second,chest,map.version(),null);
   assertThrows(RuntimeException.class,()->world.lootCommand(second,take));
   long restock=db.queryForObject("select restock_at from scene_logging_camps where scene_id=?",Long.class,campsite.id());
   tx().executeWithoutResult(status->camps.advance(runtime,Set.of(second),Set.of(),restock+1));
   assertEquals(0,equipment.available(second,SceneLoggingCamp.MATERIAL));
   assertEquals(0L,db.queryForObject("select count(*) from loot_items where container_id=?",Long.class,chest));
+  world.closeChest(second,chest,secondView.token());
   runtime.leave(second);
   tx().executeWithoutResult(status->{
    characters.die(monster,restock-1);
@@ -126,6 +130,7 @@ class ProductionIntegrationTest {
   assertTrue(characters.get(monster).alive());
   world.enterScene(second,map.version());
   runtime.put(second,campsite.id(),SceneLoggingCamp.CHEST);
+  world.openChest(second,chest,map.version(),null);
   world.lootCommand(second,take);
   assertEquals(2,equipment.available(second,SceneLoggingCamp.MATERIAL));
   assertEquals(monster,db.queryForObject("select monster_id from scene_logging_camps where scene_id=?",UUID.class,campsite.id()));
@@ -224,4 +229,54 @@ class ProductionIntegrationTest {
  UUID corpse(UUID a,long expires,boolean contents){var id=UUID.randomUUID();var p=runtime.position(a);var c=characters.get(a);db.update("insert into loot_containers(id,kind,name,source_kind,source_species,skinnable,world_version,q,r,scene_id,battle_q,battle_r,created_at,expires_at) values(?,'corpse','测试毛皮兽','monster','claw',true,?,?,?,?,?,?,?,?)",id,world.map().version(),c.q(),c.r(),p.sceneId(),p.q(),p.r(),System.currentTimeMillis(),expires);if(contents)db.update("insert into loot_items values(?,'wood',2)",id);return id;}
  @Test void skinClaimProtectsExpiredCorpseAndFailureLeavesContentsInBag(){synchronized(world){var a=actor();local(a);equip(a,"skinning_knife");long now=System.currentTimeMillis();var id=corpse(a,now+10000,true);tx().executeWithoutResult(s->{work.start(a,world.map(),new ProductionService.Start("skin",null,1,null,id),now);loot.expire(now+11000);});assertEquals(1,db.queryForObject("select count(*) from loot_containers where id=?",Integer.class,id));tx().executeWithoutResult(s->loot.finishSkin(id,a,false,now+12000));assertEquals(0,db.queryForObject("select count(*) from loot_containers where id=?",Integer.class,id));assertEquals(0,equipment.available(a,"hide"));assertNull(work.current(a));assertEquals(2,db.queryForObject("select sum(i.quantity) from loot_items i join loot_containers l on l.id=i.container_id where l.name='剥皮遗留物' and l.scene_id=?",Integer.class,runtime.position(a).sceneId()));}}
  @Test void corpseMustBeEmptyToCarryAndDroppingResumesRemainingTime(){synchronized(world){var a=actor();local(a);long now=System.currentTimeMillis();var id=corpse(a,now+100000,true);var carry=new LootService.Command("carry",id,null,null,world.map().version(),null,null);assertThrows(RuntimeException.class,()->tx().executeWithoutResult(s->loot.execute(context(a),carry,now)));tx().executeWithoutResult(s->{loot.execute(context(a),new LootService.Command("takeAll",id,null,null,world.map().version(),null,null),now);loot.execute(context(a),carry,now+1000);});assertNull(db.queryForObject("select expires_at from loot_containers where id=?",Long.class,id));tx().executeWithoutResult(s->loot.execute(context(a),new LootService.Command("dropCorpse",id,null,null,world.map().version(),null,null),now+50000));assertEquals(now+149000,db.queryForObject("select expires_at from loot_containers where id=?",Long.class,id));}}
+ @Autowired ProductionResults actionResults;
+ UUID chest(UUID actor){var c=characters.get(actor);var p=runtime.position(actor);UUID id=UUID.randomUUID();db.update("insert into loot_containers(id,kind,name,world_version,q,r,scene_id,battle_q,battle_r,created_at,expires_at) values(?,'chest','测试货箱',?,?,?,?,?,?,?,?)",id,world.map().version(),c.q(),c.r(),p.sceneId(),p.q(),p.r(),System.currentTimeMillis(),Long.MAX_VALUE);db.update("insert into loot_items values(?,'wood',2)",id);return id;}
+ @Test void chestReadCannotClaimAndStaleCloseCannotReleaseNewViewer(){synchronized(world){
+  var a=actor();var b=actor();local(a);var p=runtime.position(a);characters.relocate(b,characters.get(a).q(),characters.get(a).r());runtime.put(b,p.sceneId(),p.hex());var id=chest(a);var version=world.map().version();
+  assertThrows(RuntimeException.class,()->world.lootContents(a,id,version,null));
+  var firstView=world.openChest(a,id,version,null);var view=world.openChest(a,id,version,null);assertNotEquals(firstView.token(),view.token());world.closeChest(a,id,firstView.token());
+  assertThrows(RuntimeException.class,()->world.openChest(b,id,version,null));
+  assertThrows(RuntimeException.class,()->world.lootContents(b,id,version,null));
+  var take=new LootService.Command("takeAll",id,null,null,version,null,null);
+  assertThrows(RuntimeException.class,()->world.lootCommand(b,take));
+  world.closeChest(a,id,view.token());var newer=world.openChest(a,id,version,null);assertNotEquals(view.token(),newer.token());world.closeChest(a,id,view.token());
+  assertThrows(RuntimeException.class,()->world.openChest(b,id,version,null));world.lootCommand(a,take);assertEquals(2,equipment.available(a,"wood"));
+  assertThrows(RuntimeException.class,()->world.lootCommand(a,take));assertEquals(2,equipment.available(a,"wood"));
+  world.closeChest(a,id,newer.token());world.openChest(b,id,version,null);
+ }}
+ @Test void invalidMoveDoesNotReleaseChestButValidMoveAndDisconnectDo(){synchronized(world){
+  var a=actor();local(a);var p=runtime.position(a);var id=chest(a);String version=world.map().version();world.openChest(a,id,version,null);
+  assertThrows(RuntimeException.class,()->world.moveScene(a,999,999,version));assertTrue(loot.views().containsKey(id));
+  var dest=runtime.map(p.sceneId()).cells().stream().filter(c->!c.hex().equals(p.hex())&&!runtime.path(a,c.hex()).isEmpty()).findFirst().orElseThrow().hex();world.moveScene(a,dest.q(),dest.r(),version);assertFalse(loot.views().containsKey(id));world.stop(a);
+  world.openChest(a,id,version,null);world.closeUser(a);assertFalse(loot.views().containsKey(id));
+ }}
+ @Test void durableResultsCommitOnceAndStopCancelsOnlyUnfinishedBatches(){synchronized(world){
+  var a=actor();var b=actor();give(a,"fiber",15);long now=System.currentTimeMillis();tx().executeWithoutResult(st->work.start(a,world.map(),new ProductionService.Start("craft","bandage",5,null,null),now));
+  tx().executeWithoutResult(st->work.advance(now+5000));var completed=actionResults.recent(a);assertEquals(1,completed.size());assertEquals("success",completed.getFirst().outcome());assertEquals("bandage",completed.getFirst().items().getFirst().code());
+  world.stop(a);assertNull(work.current(a));assertEquals(12,equipment.available(a,"fiber"));var records=actionResults.recent(a);assertEquals(2,records.size());assertTrue(records.stream().anyMatch(r->r.outcome().equals("cancelled")));assertTrue(actionResults.recent(b).isEmpty());
+  tx().executeWithoutResult(st->work.advance(now+10000));assertEquals(2,actionResults.recent(a).size());assertEquals(1,equipment.available(a,"bandage"));
+  assertEquals(actionResults.recent(a),world.actionResults(a));
+ }}
+ @Test void resultInsertionRollsBackWithAward(){synchronized(world){var a=actor();give(a,"fiber",3);long now=System.currentTimeMillis();tx().executeWithoutResult(st->work.start(a,world.map(),new ProductionService.Start("craft","bandage",1,null,null),now));tx().executeWithoutResult(st->{work.advance(now+5000);st.setRollbackOnly();});assertTrue(actionResults.recent(a).isEmpty());assertEquals(0,equipment.available(a,"bandage"));assertNotNull(work.current(a));tx().executeWithoutResult(st->work.advance(now+5000));assertEquals(1,actionResults.recent(a).size());assertEquals(1,equipment.available(a,"bandage"));}}
+
+ @Test void resultUsesFacilityAnchorAndPreservesConsumedCorpseAnchor(){synchronized(world){
+  var a=actor();local(a);var p=runtime.position(a);var obj=object(a,"wood");var target=new WorldMap.Hex(((Number)obj.get("q")).intValue(),((Number)obj.get("r")).intValue());
+  var task=new ProductionService.Task(a,"craft","arrow",(UUID)obj.get("id"),null,p.sceneId(),world.map().version(),characters.get(a).q(),characters.get(a).r(),target.q()+1,target.r(),0,3000,1,0);
+  tx().executeWithoutResult(st->actionResults.record(task,"success","测试定位",List.of(),System.currentTimeMillis()));var result=actionResults.recent(a).getFirst();assertEquals(target.q(),result.q());assertEquals(target.r(),result.r());assertFalse(result.personal());
+  equip(a,"skinning_knife");var id=corpse(a,System.currentTimeMillis()+60000,false);long now=System.currentTimeMillis();tx().executeWithoutResult(st->work.start(a,world.map(),new ProductionService.Start("skin",null,null,null,id),now));tx().executeWithoutResult(st->work.advance(now+9000));var skin=actionResults.recent(a).stream().filter(r->id.equals(r.corpseId())).findFirst().orElseThrow();assertEquals(p.q(),skin.q());assertEquals(p.r(),skin.r());assertFalse(skin.personal());assertEquals(0,db.queryForObject("select count(*) from loot_containers where id=?",Integer.class,id));
+  var carried=corpse(a,now+60000,false);tx().executeWithoutResult(st->loot.execute(context(a),new LootService.Command("carry",carried,null,null,world.map().version(),null,null),now));tx().executeWithoutResult(st->work.start(a,world.map(),new ProductionService.Start("skin",null,null,null,carried),now));tx().executeWithoutResult(st->work.advance(now+9000));assertTrue(actionResults.recent(a).stream().filter(r->carried.equals(r.corpseId())).findFirst().orElseThrow().personal());
+ }}
+ @Autowired AccountService accounts;
+ @Test void chestSurvivesFirstSocketDisconnectAndReleasesOnLastOne() throws Exception {synchronized(world){
+  var a=actor();local(a);var id=chest(a);var req=new org.springframework.mock.web.MockHttpServletRequest();req.setRemoteAddr("127.0.0.1");var res=new org.springframework.mock.web.MockHttpServletResponse();accounts.login(accounts.get(a).username(),"local-test-password",req,res);String token=res.getHeader("Set-Cookie").split(";",2)[0].substring("WORLD_SESSION=".length());
+  var one=org.mockito.Mockito.mock(org.springframework.web.socket.WebSocketSession.class);var two=org.mockito.Mockito.mock(org.springframework.web.socket.WebSocketSession.class);org.mockito.Mockito.when(one.getId()).thenReturn("feedback-one");org.mockito.Mockito.when(two.getId()).thenReturn("feedback-two");org.mockito.Mockito.when(one.isOpen()).thenReturn(true);org.mockito.Mockito.when(two.isOpen()).thenReturn(true);
+  world.connect(a,token,"127.0.0.1",one);world.connect(a,token,"127.0.0.1",two);world.openChest(a,id,world.map().version(),null);world.disconnect("feedback-one");assertTrue(loot.views().containsKey(id));world.disconnect("feedback-two");assertFalse(loot.views().containsKey(id));
+ }}
+ @Test void npcChestAccessAndBattleTransitionUseSharedRules(){synchronized(world){
+  var a=actor();local(a);var p=runtime.position(a);var id=chest(a);long now=System.currentTimeMillis();var npc=characters.deploy("claw",characters.get(a).q(),characters.get(a).r(),now);runtime.put(npc.id(),p.sceneId(),p.hex());var take=new LootService.Command("takeAll",id,null,null,world.map().version(),null,null);
+  assertThrows(RuntimeException.class,()->world.lootCommand(npc.id(),take));world.openChest(npc.id(),id,world.map().version(),null);assertThrows(RuntimeException.class,()->world.openChest(a,id,world.map().version(),null));long before=equipment.available(npc.id(),"wood");world.lootCommand(npc.id(),take);assertEquals(before+2,equipment.available(npc.id(),"wood"));
+  var next=p.hex().neighbors().stream().filter(h->runtime.map(p.sceneId()).cells().stream().anyMatch(c->c.hex().equals(h)&&c.walkable())).findFirst().orElseThrow();runtime.put(a,p.sceneId(),next);world.startBattle(a,npc.id(),world.map().version());assertFalse(loot.views().containsKey(id));
+ }}
+ @Test void noIdleTimeoutAndSceneDepartureReleaseChest(){synchronized(world){var a=actor();local(a);var id=chest(a);world.openChest(a,id,world.map().version(),null);tx().executeWithoutResult(st->loot.pruneViews(System.currentTimeMillis()+24*60*60_000L));assertTrue(loot.views().containsKey(id));world.leaveScene(a,world.map().version());assertFalse(loot.views().containsKey(id));}}
+
 }
