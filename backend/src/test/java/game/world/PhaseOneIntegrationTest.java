@@ -42,7 +42,9 @@ class PhaseOneIntegrationTest {
     @Test void persistedClosureStopsQueuedMovementNpcAndBattleEntryAndRestores(){
         synchronized(world){
             var map=world.map();var index=map.index();
-            var a=map.tiles().stream().filter(t->t.walkable()&&t.hex().neighbors().stream().allMatch(h->index.containsKey(h)&&index.get(h).walkable())).findFirst().orElseThrow().hex();
+            Set<WorldMap.Hex> playerTiles=new HashSet<>();
+            for(var resident:characters.all())if(!resident.npc())playerTiles.add(resident.hex());
+            var a=map.tiles().stream().filter(t->!playerTiles.contains(t.hex())&&t.walkable()&&t.hex().neighbors().stream().allMatch(h->index.containsKey(h)&&index.get(h).walkable())).findFirst().orElseThrow().hex();
             var b=a.neighbors().getFirst();
             var account=world.register("phase_"+UUID.randomUUID().toString().substring(0,8),"phase-test-password");
             UUID user=account.id();
@@ -60,10 +62,15 @@ class PhaseOneIntegrationTest {
                 }
             });
             assertEquals(6,scenes.blocked().size());assertFalse(scenes.open(a,b));assertFalse(scenes.open(b,a));
-            world.advance();assertEquals(a,characters.get(user).hex(),"Queued movement must stop before closed edge");
-            assertThrows(RuntimeException.class,()->world.move(user,b.q(),b.r(),map.version()));
-            // The same physical boundary applies to NPC wander and reinforcement.
             var monster=CharacterService.ISLAND_BEAST;characters.relocate(monster,a.q(),a.r());
+            db.update("update characters set next_move=?,protected_until=0 where id=?",Long.MAX_VALUE,monster);
+            // This fixture verifies passages, not automatic encounters during the shared tick.
+            db.update("update characters set protected_until=? where id=?",System.currentTimeMillis()+60_000,user);
+            world.advance();assertEquals(a,characters.get(user).hex(),"Queued movement must stop before closed edge");
+            assertFalse(battles.engaged(user),"Boundary fixture must remain outside unrelated automatic encounters");
+            assertTrue(assertThrows(RuntimeException.class,()->world.move(user,b.q(),b.r(),map.version())).getMessage().contains("无法到达"));
+            // The same physical boundary applies to NPC wander and reinforcement.
+            characters.relocate(monster,a.q(),a.r());
             db.update("update characters set bind_q=?,bind_r=?,next_move=0,protected_until=0 where id=?",a.q(),a.r(),monster);
             characters.wander(System.currentTimeMillis(),Set.of());assertEquals(a,characters.get(monster).hex());
             var defender=world.register("defender_"+UUID.randomUUID().toString().substring(0,8),"phase-test-password");
@@ -71,14 +78,20 @@ class PhaseOneIntegrationTest {
             for(UUID id:List.of(defender.id(),attacker.id())){db.update("update accounts set approved=true,entered=true where id=?",id);characters.relocate(id,b.q(),b.r());}
             long now=System.currentTimeMillis();
             UUID fight=tx.execute(s->battles.start(attacker.id(),defender.id(),map.version(),map,now));
-            assertThrows(RuntimeException.class,()->tx.executeWithoutResult(s->battles.join(user,fight,map.version(),map,now)));
-            assertThrows(RuntimeException.class,()->tx.executeWithoutResult(s->battles.join(monster,fight,map.version(),map,now)));
+            assertTrue(assertThrows(RuntimeException.class,()->tx.executeWithoutResult(s->battles.join(user,fight,map.version(),map,now))).getMessage().contains("通道已封闭"));
+            assertTrue(assertThrows(RuntimeException.class,()->tx.executeWithoutResult(s->battles.join(monster,fight,map.version(),map,now))).getMessage().contains("通道已封闭"));
             UUID active=db.queryForObject("select turn_account_id from battle_encounters where id=?",UUID.class,fight);
             int direction=BattleService.DIRECTIONS.indexOf(new WorldMap.Hex(a.q()-b.q(),a.r()-b.r()));
             var d=BattleService.DIRECTIONS.get(direction);
-            db.update("update battle_actors set q=?,r=? where encounter_id=? and account_id=?",d.q()*BattleService.RADIUS,d.r()*BattleService.RADIUS,fight,active);
+            var battleView=battles.current(active,Set.of());
+            int battleRadius=((Number)battleView.get("radius")).intValue();
+            @SuppressWarnings("unchecked") var battleEdges=(List<BattleService.Edge>)battleView.get("edges");
+            assertFalse(battleEdges.get(direction).walkable(),"The persisted passage must close the battle exit");
+            db.update("update battle_actors set q=?,r=? where encounter_id=? and account_id=?",d.q()*battleRadius,d.r()*battleRadius,fight,active);
             db.update("update battle_encounters set turn_start_edge=true,turn_points=6 where id=?",fight);
-            assertThrows(RuntimeException.class,()->tx.executeWithoutResult(s->battles.withdraw(active,direction,true,Set.of(),now)));
+            var exitError=assertThrows(RuntimeException.class,()->tx.executeWithoutResult(s->battles.withdraw(active,direction,true,Set.of(),now)));
+            // Closed directions are removed from the ring's available exit sides.
+            assertTrue(exitError.getMessage().contains("外圈格子"),exitError.getMessage());
             assertEquals(6,db.queryForObject("select turn_points from battle_encounters where id=?",Integer.class,fight));
             var reloaded=new SceneService(db);reloaded.initialize(map.version());assertEquals(scenes.blocked(),reloaded.blocked());
             // Reopening one of the persisted routes makes the shared edge usable again.
