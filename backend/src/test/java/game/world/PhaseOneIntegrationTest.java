@@ -63,11 +63,14 @@ class PhaseOneIntegrationTest {
             });
             assertEquals(6,scenes.blocked().size());assertFalse(scenes.open(a,b));assertFalse(scenes.open(b,a));
             var monster=CharacterService.ISLAND_BEAST;characters.relocate(monster,a.q(),a.r());
-            db.update("update characters set next_move=?,protected_until=0 where id=?",Long.MAX_VALUE,monster);
+            // This shared NPC can be left dead by another integration-test class.
+            db.update("update characters set life='alive',hp=max_hp,death_q=null,death_r=null,timer_kind=null,timer_end=0,next_move=?,protected_until=0 where id=?",Long.MAX_VALUE,monster);
+            assertTrue(characters.get(monster).alive(),"The boundary NPC fixture must be alive");
             // This fixture verifies passages, not automatic encounters during the shared tick.
             db.update("update characters set protected_until=? where id=?",System.currentTimeMillis()+60_000,user);
             world.advance();assertEquals(a,characters.get(user).hex(),"Queued movement must stop before closed edge");
             assertFalse(battles.engaged(user),"Boundary fixture must remain outside unrelated automatic encounters");
+            assertTrue(characters.get(monster).alive(),"The shared tick must not invalidate the boundary NPC fixture");
             assertTrue(assertThrows(RuntimeException.class,()->world.move(user,b.q(),b.r(),map.version())).getMessage().contains("无法到达"));
             // The same physical boundary applies to NPC wander and reinforcement.
             characters.relocate(monster,a.q(),a.r());
@@ -79,7 +82,8 @@ class PhaseOneIntegrationTest {
             long now=System.currentTimeMillis();
             UUID fight=tx.execute(s->battles.start(attacker.id(),defender.id(),map.version(),map,now));
             assertTrue(assertThrows(RuntimeException.class,()->tx.executeWithoutResult(s->battles.join(user,fight,map.version(),map,now))).getMessage().contains("通道已封闭"));
-            assertTrue(assertThrows(RuntimeException.class,()->tx.executeWithoutResult(s->battles.join(monster,fight,map.version(),map,now))).getMessage().contains("通道已封闭"));
+            var npcJoinError=assertThrows(RuntimeException.class,()->tx.executeWithoutResult(s->battles.join(monster,fight,map.version(),map,now)));
+            assertTrue(npcJoinError.getMessage().contains("通道已封闭"),npcJoinError.getMessage()+"; NPC="+characters.get(monster)+"; scene="+battles.current(monster,Set.of()));
             UUID active=db.queryForObject("select turn_account_id from battle_encounters where id=?",UUID.class,fight);
             int direction=BattleService.DIRECTIONS.indexOf(new WorldMap.Hex(a.q()-b.q(),a.r()-b.r()));
             var d=BattleService.DIRECTIONS.get(direction);
